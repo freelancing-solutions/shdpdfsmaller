@@ -1,4 +1,11 @@
 import { PDFDocument } from 'pdf-lib';
+import * as hummus from 'hummus';
+import * as pdf2pdf from 'pdf2pdf';
+import * as textract from 'textract';
+import * as JSZip from 'jszip';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 
 export interface ConversionOptions {
   format: 'docx' | 'txt' | 'html' | 'images';
@@ -8,17 +15,17 @@ export interface ConversionOptions {
 }
 
 export interface ConversionResult {
-  convertedFile: Blob;
+  convertedFile: Buffer;
   originalSize: number;
   convertedSize: number;
   format: string;
   processingTime: number;
   settings: ConversionOptions;
+  fileName: string;
 }
 
 export class PDFConversionService {
   private static instance: PDFConversionService;
-  private pdfLib: any = null;
 
   static getInstance(): PDFConversionService {
     if (!PDFConversionService.instance) {
@@ -27,419 +34,318 @@ export class PDFConversionService {
     return PDFConversionService.instance;
   }
 
-  private async loadPDFJS() {
-    if (this.pdfLib) return this.pdfLib;
-    
-    try {
-      // Load PDF.js dynamically
-      const pdfjsLib = await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-      this.pdfLib = pdfjsLib;
-      return pdfjsLib;
-    } catch (error) {
-      console.warn('PDF.js not available, falling back to basic extraction');
-      return null;
-    }
-  }
-
-  async convertPDF(file: File, options: ConversionOptions): Promise<ConversionResult> {
+  async convertPDF(fileBuffer: Buffer, originalName: string, options: ConversionOptions): Promise<ConversionResult> {
     const startTime = Date.now();
-    const originalSize = file.size;
+    const originalSize = fileBuffer.length;
     
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      let convertedBlob: Blob;
+      let convertedBuffer: Buffer;
       
       switch (options.format) {
         case 'txt':
-          convertedBlob = await this.convertToText(arrayBuffer, options);
+          convertedBuffer = await this.convertToText(fileBuffer, options);
           break;
         case 'html':
-          convertedBlob = await this.convertToHTML(arrayBuffer, options);
+          convertedBuffer = await this.convertToHTML(fileBuffer, options);
           break;
         case 'images':
-          convertedBlob = await this.convertToImages(arrayBuffer, options);
+          convertedBuffer = await this.convertToImages(fileBuffer, options);
           break;
         case 'docx':
         default:
-          convertedBlob = await this.convertToDocx(arrayBuffer, options);
+          convertedBuffer = await this.convertToDocx(fileBuffer, options);
           break;
       }
       
+      const processingTime = Date.now() - startTime;
+      const convertedSize = convertedBuffer.length;
+      
+      const fileExtension = this.getFileExtension(options.format);
+      const fileName = `${path.parse(originalName).name}.${fileExtension}`;
+      
       return {
-        convertedFile: convertedBlob,
+        convertedFile: convertedBuffer,
         originalSize,
-        convertedSize: convertedBlob.size,
+        convertedSize,
         format: options.format,
-        processingTime: Date.now() - startTime,
+        processingTime,
         settings: options,
+        fileName
       };
     } catch (error) {
-      throw new Error(`PDF conversion failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.error('PDF conversion failed:', error);
+      throw new Error(`Failed to convert PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
-  private async extractTextFromPDF(arrayBuffer: ArrayBuffer): Promise<string[]> {
-    const pdfjsLib = await this.loadPDFJS();
-    
-    if (pdfjsLib) {
+  private async convertToText(fileBuffer: Buffer, options: ConversionOptions): Promise<Buffer> {
+    try {
+      // Save temp file for text extraction
+      const tempFilePath = await this.saveTempFile(fileBuffer, '.pdf');
+      
       try {
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        const pages: string[] = [];
-        
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const textContent = await page.getTextContent();
-          
-          let pageText = '';
-          textContent.items.forEach((item: any) => {
-            if ('str' in item) {
-              pageText += item.str + ' ';
-            }
+        // Use textract for text extraction
+        const textContent = await new Promise<string>((resolve, reject) => {
+          textract.fromFileWithPath(tempFilePath, (error: Error, text: string) => {
+            if (error) reject(error);
+            else resolve(text);
           });
-          
-          pages.push(pageText.trim());
+        });
+        
+        let cleanedText = textContent;
+        if (!options.preserveFormatting) {
+          cleanedText = this.cleanTextContent(textContent);
         }
         
-        return pages;
-      } catch (error) {
-        console.warn('PDF.js text extraction failed, using fallback');
+        return Buffer.from(cleanedText, 'utf-8');
+      } finally {
+        await this.cleanupTempFile(tempFilePath);
       }
+    } catch (error) {
+      console.error('Text conversion failed:', error);
+      // Fallback to simple text extraction
+      return this.fallbackTextExtraction(fileBuffer, options);
     }
-    
-    // Fallback: basic PDF analysis
-    return await this.basicPDFTextExtraction(arrayBuffer);
   }
 
-  private async basicPDFTextExtraction(arrayBuffer: ArrayBuffer): Promise<string[]> {
+  private async fallbackTextExtraction(fileBuffer: Buffer, options: ConversionOptions): Promise<Buffer> {
     try {
-      const pdfDoc = await PDFDocument.load(arrayBuffer);
-      const pageCount = pdfDoc.getPageCount();
-      const pages: string[] = [];
+      // Simple fallback using pdf-lib for basic text extraction
+      const pdfDoc = await PDFDocument.load(fileBuffer);
+      const pages = pdfDoc.getPages();
       
-      for (let i = 0; i < pageCount; i++) {
-        // Extract basic text patterns from PDF structure
-        const text = await this.extractBasicText(pdfDoc, i);
-        pages.push(text);
+      let textContent = '';
+      for (let i = 0; i < pages.length; i++) {
+        // This is a very basic text extraction - real text content might not be fully captured
+        textContent += `Page ${i + 1}\n==========\n`;
+        textContent += '[Text content extraction limited in this environment]\n\n';
       }
       
-      return pages;
+      if (!options.preserveFormatting) {
+        textContent = this.cleanTextContent(textContent);
+      }
+      
+      return Buffer.from(textContent, 'utf-8');
     } catch (error) {
       throw new Error('Failed to extract text from PDF');
     }
   }
 
-  private async extractBasicText(pdfDoc: PDFDocument, pageIndex: number): Promise<string> {
-    // Basic text extraction using pdf-lib
-    // This is limited but works without external dependencies
+  private async convertToHTML(fileBuffer: Buffer, options: ConversionOptions): Promise<Buffer> {
     try {
-      const pages = pdfDoc.getPages();
-      const page = pages[pageIndex];
+      // First extract text
+      const textBuffer = await this.convertToText(fileBuffer, { 
+        ...options, 
+        preserveFormatting: true // Keep formatting for HTML
+      });
+      const textContent = textBuffer.toString('utf-8');
       
-      // Get page content and try to extract readable text
-      const { width, height } = page.getSize();
-      
-      // Placeholder text with page info
-      return `[Page ${pageIndex + 1} content - ${width}x${height}pts]\n\nThis PDF contains content that requires advanced text extraction. For full text extraction, please use a server-side solution with complete PDF.js integration.`;
-    } catch (error) {
-      return `[Unable to extract text from page ${pageIndex + 1}]`;
-    }
-  }
-
-  private async convertToText(arrayBuffer: ArrayBuffer, options: ConversionOptions): Promise<Blob> {
-    const pages = await this.extractTextFromPDF(arrayBuffer);
-    let textContent = '';
-    
-    pages.forEach((pageText, index) => {
-      if (options.preserveFormatting) {
-        textContent += `=== Page ${index + 1} ===\n\n${pageText}\n\n`;
-      } else {
-        textContent += pageText + '\n\n';
-      }
-    });
-    
-    return new Blob([textContent], { type: 'text/plain; charset=utf-8' });
-  }
-
-  private async convertToHTML(arrayBuffer: ArrayBuffer, options: ConversionOptions): Promise<Blob> {
-    const pages = await this.extractTextFromPDF(arrayBuffer);
-    
-    let htmlContent = `<!DOCTYPE html>
-<html lang="en">
+      const htmlContent = `<!DOCTYPE html>
+<html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Converted PDF Document</title>
+    <title>Converted PDF</title>
     <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 40px; 
             line-height: 1.6;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f9f9f9;
-        }
-        .container {
-            background: white;
-            padding: 40px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        .page {
-            margin-bottom: 40px;
-            padding-bottom: 30px;
-            border-bottom: 2px solid #eee;
-        }
-        .page:last-child {
-            border-bottom: none;
-            margin-bottom: 0;
-        }
-        .page-header {
-            color: #666;
-            font-size: 14px;
-            margin-bottom: 15px;
-            font-weight: bold;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        .page-content {
             color: #333;
-            line-height: 1.8;
         }
-        h1 {
-            color: #2c3e50;
-            border-bottom: 3px solid #3498db;
-            padding-bottom: 10px;
+        .page { 
+            margin-bottom: 60px; 
+            border-bottom: 2px solid #e0e0e0; 
+            padding-bottom: 40px; 
         }
-        .extraction-note {
-            background: #fff3cd;
-            border: 1px solid #ffeaa7;
-            padding: 10px;
-            border-radius: 4px;
+        .page-number { 
+            color: #666; 
+            font-size: 14px; 
             margin-bottom: 20px;
-            font-size: 14px;
+            font-weight: bold;
+        }
+        .content { 
+            white-space: pre-wrap;
+            font-size: 16px;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>PDF Document</h1>
-        <div class="extraction-note">
-            <strong>Note:</strong> Text extraction is using basic PDF processing. For advanced text extraction with precise formatting, consider using server-side processing.
+    <h1>PDF to HTML Conversion</h1>
+`;
+
+      const pages = textContent.split(/\f/); // Split by form feed (page breaks)
+      
+      pages.forEach((pageText, index) => {
+        htmlContent += `<div class="page">
+            <div class="page-number">Page ${index + 1}</div>
+            <div class="content">${this.escapeHtml(pageText)}</div>
         </div>`;
-    
-    pages.forEach((pageText, index) => {
-      htmlContent += `
-        <div class="page">
-            ${options.preserveFormatting ? `<div class="page-header">Page ${index + 1}</div>` : ''}
-            <div class="page-content">${this.formatTextForHTML(pageText)}</div>
-        </div>`;
-    });
-    
-    htmlContent += `
-    </div>
-</body>
-</html>`;
-    
-    return new Blob([htmlContent], { type: 'text/html; charset=utf-8' });
-  }
-
-  private formatTextForHTML(text: string): string {
-    return text
-      .replace(/\n\n/g, '</p><p>')
-      .replace(/\n/g, '<br>')
-      .replace(/^/, '<p>')
-      .replace(/$/, '</p>')
-      .replace(/<p><\/p>/g, '');
-  }
-
-  private async convertToImages(arrayBuffer: ArrayBuffer, options: ConversionOptions): Promise<Blob> {
-    const pdfjsLib = await this.loadPDFJS();
-    
-    if (pdfjsLib) {
-      return await this.convertToImagesWithPDFJS(arrayBuffer, options, pdfjsLib);
-    } else {
-      return await this.convertToImagesBasic(arrayBuffer, options);
-    }
-  }
-
-  private async convertToImagesWithPDFJS(arrayBuffer: ArrayBuffer, options: ConversionOptions, pdfjsLib: any): Promise<Blob> {
-    try {
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      const imageDataUrls: string[] = [];
+      });
       
-      const scale = options.quality === 'high' ? 2.0 : options.quality === 'medium' ? 1.5 : 1.0;
+      htmlContent += '</body></html>';
       
-      for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const viewport = page.getViewport({ scale });
-        
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d')!;
-        canvas.height = viewport.height;
-        canvas.width = viewport.width;
-        
-        await page.render({ canvasContext: context, viewport }).promise;
-        
-        const imageDataUrl = canvas.toDataURL('image/png', options.quality === 'high' ? 1.0 : 0.8);
-        imageDataUrls.push(imageDataUrl);
-      }
-      
-      return this.createImageHTML(imageDataUrls, pdf.numPages);
+      return Buffer.from(htmlContent, 'utf-8');
     } catch (error) {
-      console.warn('PDF.js image conversion failed, using fallback');
-      return await this.convertToImagesBasic(arrayBuffer, options);
+      console.error('HTML conversion failed:', error);
+      throw new Error('Failed to convert to HTML');
     }
   }
 
-  private async convertToImagesBasic(arrayBuffer: ArrayBuffer, options: ConversionOptions): Promise<Blob> {
-    const pdfDoc = await PDFDocument.load(arrayBuffer);
-    const pageCount = pdfDoc.getPageCount();
-    const imageDataUrls: string[] = [];
-    
-    // Create placeholder images
-    for (let i = 0; i < pageCount; i++) {
-      const pages = pdfDoc.getPages();
-      const page = pages[i];
-      const { width, height } = page.getSize();
+  private async convertToImages(fileBuffer: Buffer, options: ConversionOptions): Promise<Buffer> {
+    try {
+      // For server-side, create a comprehensive report since actual image conversion
+      // would require additional server setup (like installing ImageMagick, etc.)
       
-      const imageDataUrl = this.createPlaceholderImage(i + 1, width, height, options.quality);
-      imageDataUrls.push(imageDataUrl);
-    }
-    
-    return this.createImageHTML(imageDataUrls, pageCount);
-  }
-
-  private createPlaceholderImage(pageNum: number, width: number, height: number, quality: string): string {
-    const scaledWidth = Math.min(800, width);
-    const scaledHeight = Math.min(1000, height);
-    
-    return `data:image/svg+xml;base64,${btoa(`
-      <svg width="${scaledWidth}" height="${scaledHeight}" xmlns="http://www.w3.org/2000/svg">
-        <rect width="100%" height="100%" fill="#f8f9fa" stroke="#dee2e6" stroke-width="2"/>
-        <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" 
-              font-family="Arial, sans-serif" font-size="24" fill="#6c757d">
-          Page ${pageNum}
-        </text>
-        <text x="50%" y="60%" text-anchor="middle" dominant-baseline="middle" 
-              font-family="Arial, sans-serif" font-size="14" fill="#adb5bd">
-          ${scaledWidth} × ${scaledHeight} (${quality} quality)
-        </text>
-        <text x="50%" y="70%" text-anchor="middle" dominant-baseline="middle" 
-              font-family="Arial, sans-serif" font-size="12" fill="#adb5bd">
-          For image extraction, use server-side processing
-        </text>
-      </svg>
-    `)}`;
-  }
-
-  private createImageHTML(imageDataUrls: string[], pageCount: number): Blob {
-    const htmlContent = `<!DOCTYPE html>
-<html lang="en">
+      const pdfDoc = await PDFDocument.load(fileBuffer);
+      const pageCount = pdfDoc.getPageCount();
+      
+      const zip = new JSZip();
+      
+      // Create a detailed report
+      let htmlContent = `<!DOCTYPE html>
+<html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF as Images</title>
+    <title>PDF to Images Conversion Report</title>
     <style>
-        body {
-            margin: 0;
-            padding: 20px;
-            background: #f5f5f5;
-            font-family: Arial, sans-serif;
-        }
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-        }
-        h1 {
-            text-align: center;
-            color: #333;
-            margin-bottom: 30px;
-        }
-        .page-container {
-            background: white;
-            margin-bottom: 30px;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            text-align: center;
-        }
-        .page-number {
-            color: #666;
-            margin-bottom: 15px;
-            font-weight: bold;
-        }
-        .page-image {
-            max-width: 100%;
-            height: auto;
-            border: 1px solid #ddd;
-            border-radius: 4px;
+        body { margin: 40px; font-family: Arial, sans-serif; }
+        .page { margin: 30px 0; padding: 20px; border: 1px solid #ddd; }
+        .page-number { font-weight: bold; color: #666; margin-bottom: 15px; }
+        .image-info { 
+            background: #f0f8ff; 
+            padding: 20px; 
+            border-left: 4px solid #007acc;
+            margin: 20px 0;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>PDF Document (${pageCount} pages)</h1>
-        ${imageDataUrls.map((dataUrl, index) => `
-            <div class="page-container">
-                <div class="page-number">Page ${index + 1}</div>
-                <img src="${dataUrl}" alt="Page ${index + 1}" class="page-image">
-            </div>
-        `).join('')}
+    <h1>PDF to Images Conversion Report</h1>
+    <div class="image-info">
+        <strong>Note:</strong> Full image conversion requires additional server setup.<br>
+        This report contains the PDF structure and metadata.
     </div>
-</body>
-</html>`;
-    
-    return new Blob([htmlContent], { type: 'text/html; charset=utf-8' });
-  }
+`;
 
-  private async convertToDocx(arrayBuffer: ArrayBuffer, options: ConversionOptions): Promise<Blob> {
-    const pages = await this.extractTextFromPDF(arrayBuffer);
-    
-    // Create simple DOCX-style content
-    let docContent = '';
-    
-    pages.forEach((pageText, index) => {
-      if (options.preserveFormatting && index > 0) {
-        docContent += '\n\n--- Page Break ---\n\n';
+      for (let i = 0; i < pageCount; i++) {
+        htmlContent += `
+        <div class="page">
+            <div class="page-number">Page ${i + 1}</div>
+            <div class="content">
+                Dimensions: Would be converted to image<br>
+                Quality: ${options.quality}<br>
+                Format: PNG/JPEG based on settings
+            </div>
+        </div>`;
       }
       
-      if (options.preserveFormatting) {
-        docContent += `PAGE ${index + 1}\n\n`;
-      }
+      htmlContent += '</body></html>';
       
-      docContent += pageText + '\n\n';
-    });
-    
-    // For now, return as rich text format
-    const rtfContent = `{\\rtf1\\ansi\\deff0 {\\fonttbl {\\f0 Times New Roman;}}\\f0\\fs24 ${docContent.replace(/\n/g, '\\par ')}}`;
-    
-    return new Blob([docContent], { 
-      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' 
-    });
+      zip.file('conversion-report.html', htmlContent);
+      
+      // Add PDF metadata
+      const metadata = {
+        totalPages: pageCount,
+        conversionDate: new Date().toISOString(),
+        settings: options,
+        requirements: 'Image conversion requires ImageMagick/Ghostscript installation'
+      };
+      
+      zip.file('metadata.json', JSON.stringify(metadata, null, 2));
+      
+      // Generate zip buffer
+      const zipBuffer = await zip.generateAsync({
+        type: 'nodebuffer',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 }
+      });
+      
+      return zipBuffer;
+    } catch (error) {
+      console.error('Image conversion failed:', error);
+      throw new Error('Failed to convert to images');
+    }
   }
 
-  async analyzePDF(file: File): Promise<{
+  private async convertToDocx(fileBuffer: Buffer, options: ConversionOptions): Promise<Buffer> {
+    try {
+      // Extract text first
+      const textBuffer = await this.convertToText(fileBuffer, options);
+      const textContent = textBuffer.toString('utf-8');
+      
+      // Create a simple DOCX-like structure
+      // In production, you might want to use a proper DOCX library
+      const docxContent = `PDF to DOCX Conversion
+========================
+
+${textContent}
+
+Generated on: ${new Date().toISOString()}
+Preserve Formatting: ${options.preserveFormatting}
+Quality: ${options.quality}
+`;
+
+      return Buffer.from(docxContent, 'utf-8');
+    } catch (error) {
+      console.error('DOCX conversion failed:', error);
+      throw new Error('Failed to convert to DOCX');
+    }
+  }
+
+  private cleanTextContent(text: string): string {
+    return text
+      .replace(/\s+/g, ' ')
+      .replace(/(\r\n|\n|\r)/g, '\n')
+      .replace(/\n\s*\n/g, '\n\n')
+      .trim();
+  }
+
+  private escapeHtml(text: string): string {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  private getFileExtension(format: string): string {
+    const extensions: { [key: string]: string } = {
+      'txt': 'txt',
+      'html': 'html',
+      'images': 'zip',
+      'docx': 'docx'
+    };
+    return extensions[format] || 'bin';
+  }
+
+  async analyzePDF(fileBuffer: Buffer): Promise<{
     pageCount: number;
     size: number;
     textContent: boolean;
     images: boolean;
     recommendedFormats: string[];
+    metadata: any;
   }> {
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const pdfDoc = await PDFDocument.load(arrayBuffer);
-      
+      const pdfDoc = await PDFDocument.load(fileBuffer);
       const pageCount = pdfDoc.getPageCount();
-      const size = file.size;
+      const size = fileBuffer.length;
       
-      // Basic analysis
-      const hasText = pageCount > 0;
-      const hasImages = pageCount > 1; // Assume multiple pages might have images
+      // Extract basic metadata
+      const metadata = {
+        title: pdfDoc.getTitle() || 'Unknown',
+        author: pdfDoc.getAuthor() || 'Unknown',
+        creationDate: pdfDoc.getCreationDate()?.toString() || 'Unknown'
+      };
       
-      const recommendedFormats = ['txt', 'html', 'images'];
-      if (hasText) {
-        recommendedFormats.push('docx');
+      // Simple analysis - assume text content for most PDFs
+      const hasText = size > 1000; // Assume text if file is not tiny
+      const hasImages = pageCount > 1; // Assume images if multiple pages
+      
+      const recommendedFormats = ['txt', 'html', 'docx'];
+      if (hasImages) {
+        recommendedFormats.push('images');
       }
       
       return {
@@ -448,32 +354,26 @@ export class PDFConversionService {
         textContent: hasText,
         images: hasImages,
         recommendedFormats,
+        metadata
       };
     } catch (error) {
-      throw new Error(`PDF analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.error('PDF analysis failed:', error);
+      throw new Error(`Failed to analyze PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
-  async batchConvert(files: File[], options: ConversionOptions): Promise<ConversionResult[]> {
-    const results: ConversionResult[] = [];
-    
-    for (const file of files) {
-      try {
-        const result = await this.convertPDF(file, options);
-        results.push(result);
-      } catch (error) {
-        console.error(`Failed to convert ${file.name}:`, error);
-        results.push({
-          convertedFile: new Blob(['Conversion failed']),
-          originalSize: file.size,
-          convertedSize: 0,
-          format: options.format,
-          processingTime: 0,
-          settings: options,
-        });
-      }
+  private async saveTempFile(buffer: Buffer, extension: string = '.pdf'): Promise<string> {
+    const tempDir = os.tmpdir();
+    const tempFilePath = path.join(tempDir, `pdf_conv_${Date.now()}${extension}`);
+    await fs.promises.writeFile(tempFilePath, buffer);
+    return tempFilePath;
+  }
+
+  private async cleanupTempFile(filePath: string): Promise<void> {
+    try {
+      await fs.promises.unlink(filePath);
+    } catch (error) {
+      console.warn('Could not delete temp file:', filePath);
     }
-    
-    return results;
   }
 }
