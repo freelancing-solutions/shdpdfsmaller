@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Upload, Download, FileText, Settings, Zap, Search, Trash2, RefreshCw } from 'lucide-react';
 import { useUser } from '@/hooks/useUser';
 import { useTabStore } from '@/store/tab-store';
+import { APIClient } from '@/utils/api-client';
 
 // File interfaces
 interface FileItem {
@@ -19,6 +20,7 @@ interface FileItem {
   name: string;
   size: number;
   type: string;
+  file?: File; // Make it optional temporarily
   compressedSize?: number;
   compressionRatio?: number;
   compressedBlob?: Blob;
@@ -144,86 +146,107 @@ export default function Home() {
   const [storageInfo, setStorageInfo] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  const handleFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = Array.from(event.target.files || []);
-    const newFiles: FileItem[] = [];
-    
-    for (const file of selectedFiles) {
-      const fileItem: FileItem = {
-        id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        status: 'pending',
-      };
-      
-      try {
-        const formData = new FormData();
-        formData.append('file', file);
-        
-        const response = await fetch('/api/analyze', {
-          method: 'POST',
-          body: formData,
-        });
-        
-        if (response.ok) {
-          const analysis = await response.json();
-          if (analysis.success) {
-            fileItem.compressedSize = analysis.analysis.estimatedCompression.estimatedSize;
-            fileItem.compressionRatio = 1 - analysis.analysis.compressionPotential;
-          }
-        }
-      } catch (error) {
-        console.warn('Failed to analyze file:', error);
-      }
-      
-      newFiles.push(fileItem);
+// Updated file upload handler with validation
+const handleFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const selectedFiles = Array.from(event.target.files || []);
+  const newFiles: FileItem[] = [];
+  
+  for (const file of selectedFiles) {
+    // Validate file before processing
+    const validation = APIClient.validateFile(file);
+    if (!validation.isValid) {
+      console.error(`File validation failed for ${file.name}: ${validation.error}`);
+      // You could show this error to the user
+      continue;
     }
-    
-    setFiles(prev => [...prev, ...newFiles]);
-  }, []);
 
-  const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const droppedFiles = Array.from(event.dataTransfer.files);
-    const pdfFiles = droppedFiles.filter(file => file.type === 'application/pdf');
-    
-    const newFiles: FileItem[] = [];
-    
-    for (const file of pdfFiles) {
-      const fileItem: FileItem = {
-        id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        status: 'pending',
-      };
+    const fileItem: FileItem = {
+      id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name: file.name,
+      size: file.size,
+      type: file.type || 'application/pdf', // Fallback for empty type
+      file: file,
+      status: 'pending',
+    };
+
+    // Try to get analysis data for compression estimation
+    try {
+      const analysis = await APIClient.analyzeFile(file, {
+        analysisType: 'compression-potential',
+        includeMetadata: false
+      });
       
-      try {
-        const formData = new FormData();
-        formData.append('file', file);
-        
-        const response = await fetch('/api/analyze', {
-          method: 'POST',
-          body: formData,
-        });
-        
-        if (response.ok) {
-          const analysis = await response.json();
-          if (analysis.success) {
-            fileItem.compressedSize = analysis.analysis.estimatedCompression.estimatedSize;
-            fileItem.compressionRatio = 1 - analysis.analysis.compressionPotential;
-          }
-        }
-      } catch (error) {
-        console.warn('Failed to analyze file:', error);
+      if (analysis.success && analysis.analysis) {
+        fileItem.compressedSize = analysis.analysis.estimatedCompression?.estimatedSize;
+        fileItem.compressionRatio = 1 - (analysis.analysis.compressionPotential || 0);
       }
-      
-      newFiles.push(fileItem);
+    } catch (error) {
+      console.warn('Failed to analyze file for compression estimation:', error);
+      // Continue without analysis data - this is not critical
     }
     
-    setFiles(prev => [...prev, ...newFiles]);
-  }, []);
+    newFiles.push(fileItem);
+  }
+  
+  setFiles(prev => [...prev, ...newFiles]);
+}, []);
+
+
+const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
+  event.preventDefault();
+  const droppedFiles = Array.from(event.dataTransfer.files);
+  
+  // Filter for PDF files and validate them
+  const validFiles: File[] = [];
+  
+  for (const file of droppedFiles) {
+    const validation = APIClient.validateFile(file);
+    if (validation.isValid) {
+      validFiles.push(file);
+    } else {
+      console.warn(`Skipping invalid file ${file.name}: ${validation.error}`);
+    }
+  }
+  
+  if (validFiles.length === 0) {
+    // Show error message to user
+    console.error('No valid PDF files found in drop');
+    return;
+  }
+  
+  const newFiles: FileItem[] = [];
+  
+  for (const file of validFiles) {
+    const fileItem: FileItem = {
+      id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name: file.name,
+      size: file.size,
+      type: file.type || 'application/pdf',
+      file: file,
+      status: 'pending',
+    };
+      
+    // Try to get analysis data
+    try {
+      const analysis = await APIClient.analyzeFile(file, {
+        analysisType: 'compression-potential',
+        includeMetadata: false
+      });
+      
+      if (analysis.success && analysis.analysis) {
+        fileItem.compressedSize = analysis.analysis.estimatedCompression?.estimatedSize;
+        fileItem.compressionRatio = 1 - (analysis.analysis.compressionPotential || 0);
+      }
+    } catch (error) {
+      console.warn('Failed to analyze file:', error);
+    }
+    
+    newFiles.push(fileItem);
+  }
+  
+  setFiles(prev => [...prev, ...newFiles]);
+}, []);
+
 
   const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -233,95 +256,127 @@ export default function Home() {
     setFiles(prev => prev.filter(file => file.id !== fileId));
   }, []);
 
-  const startCompression = useCallback(async () => {
-    if (isLoading) return;
-    if (!user) {
-        alert("Please log in to use this feature.");
-        return;
-    }
-    if (files.length > 1 && user.Subscription?.plan !== 'PRO' && user.Subscription?.plan !== 'ENTERPRISE') {
-        alert("Bulk compression is a PRO feature. Please upgrade your plan.");
-        return;
-    }
+// Updated compression handler using the new API client
+const startCompression = useCallback(async () => {
+  if (isLoading) return;
+  if (!user) {
+    alert("Please log in to use this feature.");
+    return;
+  }
+  if (files.length > 1 && user.Subscription?.plan !== 'PRO' && user.Subscription?.plan !== 'ENTERPRISE') {
+    alert("Bulk compression is a PRO feature. Please upgrade your plan.");
+    return;
+  }
 
-    if (files.length === 0) return;
+  if (files.length === 0) return;
 
-    setIsProcessing(true);
-    setProgress(0);
-    setBulkCompressedBlob(null);
+  const filesToProcess = files.filter(f => f.status === 'pending' && f.file);
+  if (filesToProcess.length === 0) {
+    console.warn('No files ready for processing');
+    return;
+  }
 
-    try {
-      const filesToProcess = files.filter(f => f.status === 'pending');
-      if (filesToProcess.length === 0) {
-        setIsProcessing(false);
-        return;
-      }
+  setIsProcessing(true);
+  setProgress(0);
+  setBulkCompressedBlob(null);
 
-      const formData = new FormData();
-      formData.append('compressionLevel', settings.compressionLevel);
-      formData.append('imageQuality', settings.imageQuality.toString());
+  try {
+    // Update files status to processing
+    const processingIds = filesToProcess.map(f => f.id);
+    setFiles(prev => prev.map(f => 
+      processingIds.includes(f.id) ? { ...f, status: 'processing' } : f
+    ));
 
-      if (filesToProcess.length === 1) {
-        const file = filesToProcess[0];
-        setFiles(prev => prev.map(f => f.id === file.id ? { ...f, status: 'processing' } : f));
-        const blob = await (await fetch(file.name)).blob();
-        formData.append('file', blob, file.name);
+    const compressionOptions = {
+      compressionLevel: settings.compressionLevel,
+      imageQuality: settings.imageQuality
+    };
 
-        const response = await fetch('/api/compress/single', {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          throw new Error(`Compression failed: ${response.statusText}`);
+    if (filesToProcess.length === 1) {
+      // Single file compression
+      const fileItem = filesToProcess[0];
+      
+      console.log('Compressing single file:', fileItem.name);
+      
+      const compressedBlob = await APIClient.compressFiles(
+        fileItem.file!,
+        compressionOptions,
+        {
+          onProgress: (progress) => setProgress(progress),
+          onError: (error) => {
+            console.error('Compression error:', error);
+            setFiles(prev => prev.map(f =>
+              f.id === fileItem.id ? { ...f, status: 'error', error } : f
+            ));
+          }
         }
+      );
 
-        const compressedBlob = await response.blob();
-        const compressedSize = compressedBlob.size;
-        const originalSize = file.size;
-        const compressionRatio = 1 - (compressedSize / originalSize);
+      const compressedSize = compressedBlob.size;
+      const originalSize = fileItem.size;
+      const compressionRatio = 1 - (compressedSize / originalSize);
 
-        setFiles(prev => prev.map(f =>
-          f.id === file.id
-            ? {
-              ...f,
-              status: 'completed',
-              compressedSize,
-              compressionRatio,
-              compressedBlob,
-            }
-            : f
-        ));
-        setProgress(100);
+      setFiles(prev => prev.map(f =>
+        f.id === fileItem.id
+          ? {
+            ...f,
+            status: 'completed',
+            compressedSize,
+            compressionRatio,
+            compressedBlob,
+          }
+          : f
+      ));
+      setProgress(100);
 
-      } else {
-        setFiles(prev => prev.map(f => filesToProcess.find(ftp => ftp.id === f.id) ? { ...f, status: 'processing' } : f));
-        for (const file of filesToProcess) {
-            const blob = await (await fetch(file.name)).blob();
-            formData.append('files', blob, file.name);
+    } else {
+      // Multiple file compression
+      const validFiles = filesToProcess.map(f => f.file!);
+      
+      console.log('Compressing multiple files:', validFiles.length);
+      
+      const compressedBlob = await APIClient.compressFiles(
+        validFiles,
+        compressionOptions,
+        {
+          onProgress: (progress) => setProgress(progress),
+          onError: (error) => {
+            console.error('Bulk compression error:', error);
+            // Mark all as error
+            setFiles(prev => prev.map(f =>
+              processingIds.includes(f.id) ? { ...f, status: 'error', error } : f
+            ));
+          }
         }
+      );
 
-        const response = await fetch('/api/compress/bulk', {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          throw new Error(`Bulk compression failed: ${response.statusText}`);
-        }
-
-        const bulkBlob = await response.blob();
-        setBulkCompressedBlob(bulkBlob);
-        setFiles(prev => prev.map(f => filesToProcess.find(ftp => ftp.id === f.id) ? { ...f, status: 'completed' } : f));
-        setProgress(100);
-      }
-    } catch (error) {
-      console.error('Compression process failed:', error);
-      setFiles(prev => prev.map(f => f.status === 'processing' ? { ...f, status: 'error', error: error instanceof Error ? error.message : 'Unknown error' } : f));
-    } finally {
-      setIsProcessing(false);
+      setBulkCompressedBlob(compressedBlob);
+      
+      // For bulk operations, mark all as completed
+      // You might want to handle individual file results differently
+      setFiles(prev => prev.map(f =>
+        processingIds.includes(f.id) ? { ...f, status: 'completed' } : f
+      ));
+      setProgress(100);
     }
-  }, [files, settings, user, isLoading]);
+
+  } catch (error) {
+    console.error('Compression process failed:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    
+    setFiles(prev => prev.map(f => 
+      f.status === 'processing' ? { 
+        ...f, 
+        status: 'error', 
+        error: errorMessage
+      } : f
+    ));
+  } finally {
+    setIsProcessing(false);
+  }
+}, [files, settings, user, isLoading]);
+
+
 
   const downloadFile = useCallback((fileId: string) => {
     const file = files.find(f => f.id === fileId);
@@ -355,18 +410,6 @@ export default function Home() {
     setProgress(0);
   }, []);
 
-  const handleConvertFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = Array.from(event.target.files || []);
-    const newFiles: ConvertFileItem[] = selectedFiles.map(file => ({
-      id: `convert_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      name: file.name,
-      size: file.size,
-      type: file.type,
-      status: 'pending' as const,
-    }));
-    
-    setConvertFiles(prev => [...prev, ...newFiles]);
-  }, []);
 
   const handleConvertDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -388,77 +431,99 @@ export default function Home() {
     setConvertFiles(prev => prev.filter(file => file.id !== fileId));
   }, []);
 
-  const startConversion = useCallback(async () => {
-    if (convertFiles.length === 0) return;
+
+const startConversion = useCallback(async () => {
+  if (convertFiles.length === 0) return;
+  
+  const filesToProcess = convertFiles.filter(f => f.status === 'pending');
+  if (filesToProcess.length === 0) return;
+
+  setIsConverting(true);
+  setConvertProgress(0);
+  
+  try {
+    const totalFiles = filesToProcess.length;
+    let processedFiles = 0;
     
-    setIsConverting(true);
-    setConvertProgress(0);
-    
-    try {
-      const totalFiles = convertFiles.filter(f => f.status === 'pending').length;
-      let processedFiles = 0;
+    for (const fileItem of filesToProcess) {
+      setConvertFiles(prev => prev.map(f => 
+        f.id === fileItem.id ? { ...f, status: 'processing' } : f
+      ));
       
-      for (const file of convertFiles) {
-        if (file.status !== 'pending') continue;
+      try {
+        const convertedBlob = await APIClient.convertFile(
+          fileItem.file!,
+          {
+            format: convertSettings.format,
+            quality: convertSettings.quality,
+            preserveFormatting: convertSettings.preserveFormatting,
+            extractImages: convertSettings.extractImages
+          },
+          {
+            onError: (error) => {
+              console.error(`Conversion failed for ${fileItem.name}:`, error);
+              setConvertFiles(prev => prev.map(f => 
+                f.id === fileItem.id ? { ...f, status: 'error', error } : f
+              ));
+            }
+          }
+        );
+        
+        const convertedSize = convertedBlob.size;
         
         setConvertFiles(prev => prev.map(f => 
-          f.id === file.id 
-            ? { ...f, status: 'processing' as const }
-            : f
+          f.id === fileItem.id ? { 
+            ...f, 
+            status: 'completed',
+            format: convertSettings.format,
+            convertedSize,
+            convertedBlob
+          } : f
         ));
         
-        try {
-          const formData = new FormData();
-          const blob = await (await fetch(file.name)).blob();
-          formData.append('file', blob, file.name);
-          formData.append('format', convertSettings.format);
-          formData.append('quality', convertSettings.quality);
-          formData.append('preserveFormatting', convertSettings.preserveFormatting.toString());
-          formData.append('extractImages', convertSettings.extractImages.toString());
-          
-          const response = await fetch('/api/convert', {
-            method: 'POST',
-            body: formData,
-          });
-          
-          if (!response.ok) {
-            throw new Error(`Conversion failed: ${response.statusText}`);
-          }
-          
-          const convertedBlob = await response.blob();
-          const convertedSize = convertedBlob.size;
-          
-          setConvertFiles(prev => prev.map(f => 
-            f.id === file.id 
-              ? { 
-                  ...f, 
-                  status: 'completed' as const,
-                  format: convertSettings.format,
-                  convertedSize,
-                  convertedBlob,
-                }
-              : f
-          ));
-          
-        } catch (error) {
-          console.error(`Failed to convert ${file.name}:`, error);
-          setConvertFiles(prev => prev.map(f => 
-            f.id === file.id 
-              ? { ...f, status: 'error' as const, error: error instanceof Error ? error.message : 'Unknown error' }
-              : f
-          ));
-        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        console.error(`Failed to convert ${fileItem.name}:`, error);
         
-        processedFiles++;
-        setConvertProgress((processedFiles / totalFiles) * 100);
+        setConvertFiles(prev => prev.map(f => 
+          f.id === fileItem.id ? { ...f, status: 'error', error: errorMessage } : f
+        ));
       }
       
-    } catch (error) {
-      console.error('Conversion process failed:', error);
-    } finally {
-      setIsConverting(false);
+      processedFiles++;
+      setConvertProgress((processedFiles / totalFiles) * 100);
     }
-  }, [convertFiles, convertSettings]);
+    
+  } catch (error) {
+    console.error('Conversion process failed:', error);
+  } finally {
+    setIsConverting(false);
+  }
+}, [convertFiles, convertSettings]);
+
+// Updated file upload handlers for convert tab
+const handleConvertFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const selectedFiles = Array.from(event.target.files || []);
+  const validFiles: ConvertFileItem[] = [];
+  
+  for (const file of selectedFiles) {
+    const validation = APIClient.validateFile(file);
+    if (validation.isValid) {
+      validFiles.push({
+        id: `convert_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        name: file.name,
+        size: file.size,
+        type: file.type || 'application/pdf',
+        file: file,
+        status: 'pending',
+      });
+    } else {
+      console.warn(`Invalid file ${file.name}: ${validation.error}`);
+    }
+  }
+  
+  setConvertFiles(prev => [...prev, ...validFiles]);
+}, []);
 
   const downloadConvertFile = useCallback((fileId: string) => {
     const file = convertFiles.find(f => f.id === fileId);

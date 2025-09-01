@@ -32,7 +32,10 @@ export const metadata: Metadata = {
   },
 };
 
+import { ThemeProvider } from '@/components/layout/ThemeProvider';
 import { Header } from '@/components/layout/Header';
+
+// ... (rest of the imports)
 
 export default function RootLayout({
   children,
@@ -44,9 +47,15 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
-        <Header />
-        <main className="flex-1">{children}</main>
-        <Toaster />
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
+          enableSystem
+        >
+          <Header />
+          <main className="flex-1">{children}</main>
+          <Toaster />
+        </ThemeProvider>
       </body>
     </html>
   );

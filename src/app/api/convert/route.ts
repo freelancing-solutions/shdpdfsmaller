@@ -1,123 +1,153 @@
-import { NextRequest, NextResponse } from 'next/server';
+// app/api/convert/route.ts
+import { NextRequest } from 'next/server';
 import { PDFConversionService } from '@/lib/pdf-conversion';
+import { APIFileHandler } from '@/lib/api-utils';
+
+export const runtime = 'edge';
 
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData();
-    const file = formData.get('file') as File;
-    const format = formData.get('format') as string;
-    const quality = formData.get('quality') as string;
-    const preserveFormatting = formData.get('preserveFormatting') === 'true';
-    const extractImages = formData.get('extractImages') === 'true';
+    console.log('=== CONVERSION API CALLED ===');
 
-    if (!file) {
-      return NextResponse.json(
-        { error: 'No file provided' },
-        { status: 400 }
-      );
-    }
-
-    if (file.type !== 'application/pdf') {
-      return NextResponse.json(
-        { error: 'Only PDF files are supported' },
-        { status: 400 }
-      );
-    }
-
-    // Validate conversion format
-    const validFormats = ['docx', 'txt', 'html', 'images'];
-    if (!validFormats.includes(format)) {
-      return NextResponse.json(
-        { error: 'Invalid conversion format' },
-        { status: 400 }
-      );
-    }
-
-    // Validate quality
-    const validQualities = ['low', 'medium', 'high'];
-    if (!validQualities.includes(quality)) {
-      return NextResponse.json(
-        { error: 'Invalid quality setting' },
-        { status: 400 }
-      );
-    }
-
-    // Check file size (limit to 50MB)
-    const maxSize = 50 * 1024 * 1024; // 50MB
-    if (file.size > maxSize) {
-      return NextResponse.json(
-        { error: 'File size exceeds 50MB limit' },
-        { status: 400 }
-      );
-    }
-
-    const conversionService = PDFConversionService.getInstance();
-    
-    const options = {
-      format: format as 'docx' | 'txt' | 'html' | 'images',
-      quality: quality as 'low' | 'medium' | 'high',
-      preserveFormatting,
-      extractImages,
-    };
-
-    const result = await conversionService.convertPDF(file, options);
-
-    // Determine content type based on format
-    let contentType: string;
-    let fileExtension: string;
-    
-    switch (format) {
-      case 'txt':
-        contentType = 'text/plain';
-        fileExtension = 'txt';
-        break;
-      case 'html':
-        contentType = 'text/html';
-        fileExtension = 'html';
-        break;
-      case 'images':
-        contentType = 'text/html';
-        fileExtension = 'html';
-        break;
-      case 'docx':
-      default:
-        contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-        fileExtension = 'docx';
-        break;
-    }
-
-    // Create response with converted file
-    const response = new NextResponse(result.convertedFile, {
-      status: 200,
-      headers: {
-        'Content-Type': contentType,
-        'Content-Disposition': `attachment; filename="${file.name.replace('.pdf', `.${fileExtension}`)}"`,
-        'X-Original-Size': result.originalSize.toString(),
-        'X-Converted-Size': result.convertedSize.toString(),
-        'X-Conversion-Format': result.format,
-        'X-Processing-Time': result.processingTime.toString(),
-      },
+    // Parse form data using standardized handler
+    const { file, params } = await APIFileHandler.parseFormData(request, {
+      maxSize: 50 * 1024 * 1024, // 50MB
+      allowedTypes: ['application/pdf'],
+      required: true
     });
 
-    return response;
+    if (!file) {
+      throw new Error('No file provided for conversion');
+    }
+
+    // Validate conversion parameters
+    const format = APIFileHandler.validateParam(
+      params.format,
+      ['docx', 'txt', 'html', 'images'] as const,
+      'format'
+    );
+
+    const quality = APIFileHandler.validateParam(
+      params.quality,
+      ['low', 'medium', 'high'] as const,
+      'quality',
+      'medium'
+    );
+
+    const preserveFormatting = APIFileHandler.validateBooleanParam(
+      params.preserveFormatting,
+      'preserveFormatting',
+      true
+    );
+
+    const extractImages = APIFileHandler.validateBooleanParam(
+      params.extractImages,
+      'extractImages',
+      false
+    );
+
+    console.log('Validated parameters:', {
+      file: `${file.name} (${APIFileHandler.formatFileSize(file.size)})`,
+      format,
+      quality,
+      preserveFormatting,
+      extractImages
+    });
+
+    // Initialize conversion service
+    const conversionService = PDFConversionService.getInstance();
+    
+    const conversionOptions = {
+      format,
+      quality,
+      preserveFormatting,
+      extractImages
+    };
+
+    console.log('Starting conversion with options:', conversionOptions);
+
+    const result = await conversionService.convertPDF(file, conversionOptions);
+
+    console.log('Conversion successful:', {
+      originalSize: APIFileHandler.formatFileSize(result.originalSize),
+      convertedSize: APIFileHandler.formatFileSize(result.convertedSize),
+      format: result.format,
+      processingTime: `${result.processingTime}ms`
+    });
+
+    // Determine content type and file extension
+    const contentTypeMap = {
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      txt: 'text/plain',
+      html: 'text/html',
+      images: 'application/zip'
+    };
+
+    const fileExtensionMap = {
+      docx: 'docx',
+      txt: 'txt', 
+      html: 'html',
+      images: 'zip'
+    };
+
+    const contentType = contentTypeMap[format];
+    const extension = fileExtensionMap[format];
+    const filename = file.name.replace('.pdf', `.${extension}`);
+
+    const metadata = {
+      'Original-Size': result.originalSize.toString(),
+      'Converted-Size': result.convertedSize.toString(),
+      'Conversion-Format': result.format,
+      'Processing-Time': result.processingTime.toString(),
+      'Preserve-Formatting': preserveFormatting.toString(),
+      'Extract-Images': extractImages.toString()
+    };
+
+    return APIFileHandler.createFileResponse(
+      result.convertedFile,
+      filename,
+      contentType,
+      metadata
+    );
 
   } catch (error) {
-    console.error('Conversion API error:', error);
-    return NextResponse.json(
-      { error: 'Failed to convert PDF' },
-      { status: 500 }
-    );
+    return APIFileHandler.createErrorResponse(error, 400);
   }
 }
 
-export async function GET() {
-  return NextResponse.json({
-    message: 'PDF Conversion API',
-    endpoints: {
-      convert: 'POST /api/convert - Convert a PDF file',
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 200,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
     },
-    supportedFormats: ['docx', 'txt', 'html', 'images'],
-    supportedQualities: ['low', 'medium', 'high'],
-    maxFileSize: '50MB',
+  });
+}
+
+export async function GET() {
+  return Response.json({
+    success: true,
+    message: 'PDF Conversion API',
+    version: '1.0.0',
+    endpoints: {
+      convert: 'POST /api/convert - Convert PDF to other formats'
+    },
+    parameters: {
+      file: 'PDF file to convert (File object)',
+      format: 'Output format (docx|txt|html|images) - required',
+      quality: 'Conversion quality (low|medium|high) - default: medium',
+      preserveFormatting: 'Preserve document formatting (true|false) - default: true',
+      extractImages: 'Extract images during conversion (true|false) - default: false'
+    },
+    supportedFormats: {
+      input: ['PDF'],
+      output: ['DOCX', 'TXT', 'HTML', 'Images (ZIP)']
+    },
+    limits: {
+      maxFileSize: '50MB',
+      supportedInputTypes: ['application/pdf']
+    }
   });
 }

@@ -11,6 +11,7 @@ import { SubscriptionDialog } from '@/components/subscription/SubscriptionDialog
 import { ProfileDialog } from '@/components/auth/ProfileDialog';
 import { useUser } from '@/hooks/useUser';
 import { useTabStore } from '@/store/tab-store';
+import { ThemeToggle } from './ThemeToggle'; // <-- MOVED TO TOP
 
 export function Header() {
     const { user, isLoading } = useUser();
@@ -38,6 +39,8 @@ export function Header() {
                 </div>
 
                 <div className="flex flex-1 items-center justify-between space-x-2 md:justify-end">
+                    {/* REMOVED THE IMPORT STATEMENT FROM HERE */}
+                    
                     <nav className="hidden md:flex gap-2">
                         {isLoading ? <p>Loading...</p> : user ? (
                             <>
@@ -52,6 +55,7 @@ export function Header() {
                                 <RegisterDialog />
                             </>
                         )}
+                        <ThemeToggle />
                     </nav>
                 </div>
 
