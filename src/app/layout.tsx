@@ -32,6 +32,8 @@ export const metadata: Metadata = {
   },
 };
 
+import { Header } from '@/components/layout/Header';
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -42,7 +44,8 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
-        {children}
+        <Header />
+        <main className="flex-1">{children}</main>
         <Toaster />
       </body>
     </html>

@@ -10,6 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
 import { Upload, Download, FileText, Settings, Zap, Search, Trash2, RefreshCw } from 'lucide-react';
+import { useUser } from '@/hooks/useUser';
+import { useTabStore } from '@/store/tab-store';
 
 // File interfaces
 interface FileItem {
@@ -99,8 +101,10 @@ interface AISettings {
 }
 
 export default function Home() {
-  // Compression state
+  const { user, isLoading } = useUser();
+  const { activeTab, setActiveTab } = useTabStore();
   const [files, setFiles] = useState<FileItem[]>([]);
+  const [bulkCompressedBlob, setBulkCompressedBlob] = useState<Blob | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [settings, setSettings] = useState<CompressionSettings>({
@@ -108,7 +112,6 @@ export default function Home() {
     imageQuality: 80,
   });
 
-  // Convert state
   const [convertFiles, setConvertFiles] = useState<ConvertFileItem[]>([]);
   const [isConverting, setIsConverting] = useState(false);
   const [convertProgress, setConvertProgress] = useState(0);
@@ -119,7 +122,6 @@ export default function Home() {
     extractImages: false,
   });
 
-  // OCR state
   const [ocrFiles, setOcrFiles] = useState<OCRFileItem[]>([]);
   const [isOCRProcessing, setIsOCRProcessing] = useState(false);
   const [ocrProgress, setOcrProgress] = useState(0);
@@ -130,7 +132,6 @@ export default function Home() {
     confidence: 85,
   });
 
-  // AI Tools state
   const [aiFiles, setAiFiles] = useState<AIFileItem[]>([]);
   const [isAIProcessing, setIsAIProcessing] = useState(false);
   const [aiProgress, setAiProgress] = useState(0);
@@ -139,18 +140,10 @@ export default function Home() {
     detailLevel: 'detailed',
   });
 
-  // File Manager state
   const [managedFiles, setManagedFiles] = useState<ManagedFileItem[]>([]);
   const [storageInfo, setStorageInfo] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Load managed files on component mount
-  useEffect(() => {
-    loadManagedFiles();
-    loadStorageInfo();
-  }, []);
-
-  // Compression handlers
   const handleFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(event.target.files || []);
     const newFiles: FileItem[] = [];
@@ -164,7 +157,6 @@ export default function Home() {
         status: 'pending',
       };
       
-      // Analyze the file for compression potential
       try {
         const formData = new FormData();
         formData.append('file', file);
@@ -207,7 +199,6 @@ export default function Home() {
         status: 'pending',
       };
       
-      // Analyze the file for compression potential
       try {
         const formData = new FormData();
         formData.append('file', file);
@@ -243,75 +234,94 @@ export default function Home() {
   }, []);
 
   const startCompression = useCallback(async () => {
+    if (isLoading) return;
+    if (!user) {
+        alert("Please log in to use this feature.");
+        return;
+    }
+    if (files.length > 1 && user.Subscription?.plan !== 'PRO' && user.Subscription?.plan !== 'ENTERPRISE') {
+        alert("Bulk compression is a PRO feature. Please upgrade your plan.");
+        return;
+    }
+
     if (files.length === 0) return;
-    
+
     setIsProcessing(true);
     setProgress(0);
-    
+    setBulkCompressedBlob(null);
+
     try {
-      const totalFiles = files.filter(f => f.status === 'pending').length;
-      let processedFiles = 0;
-      
-      for (const file of files) {
-        if (file.status !== 'pending') continue;
-        
-        setFiles(prev => prev.map(f => 
-          f.id === file.id 
-            ? { ...f, status: 'processing' as const }
+      const filesToProcess = files.filter(f => f.status === 'pending');
+      if (filesToProcess.length === 0) {
+        setIsProcessing(false);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('compressionLevel', settings.compressionLevel);
+      formData.append('imageQuality', settings.imageQuality.toString());
+
+      if (filesToProcess.length === 1) {
+        const file = filesToProcess[0];
+        setFiles(prev => prev.map(f => f.id === file.id ? { ...f, status: 'processing' } : f));
+        const blob = await (await fetch(file.name)).blob();
+        formData.append('file', blob, file.name);
+
+        const response = await fetch('/api/compress/single', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Compression failed: ${response.statusText}`);
+        }
+
+        const compressedBlob = await response.blob();
+        const compressedSize = compressedBlob.size;
+        const originalSize = file.size;
+        const compressionRatio = 1 - (compressedSize / originalSize);
+
+        setFiles(prev => prev.map(f =>
+          f.id === file.id
+            ? {
+              ...f,
+              status: 'completed',
+              compressedSize,
+              compressionRatio,
+              compressedBlob,
+            }
             : f
         ));
-        
-        try {
-          const formData = new FormData();
-          formData.append('file', new Blob([await (await fetch(file.name)).blob()]), file.name);
-          formData.append('compressionLevel', settings.compressionLevel);
-          formData.append('imageQuality', settings.imageQuality.toString());
-          
-          const response = await fetch('/api/compress', {
-            method: 'POST',
-            body: formData,
-          });
-          
-          if (!response.ok) {
-            throw new Error(`Compression failed: ${response.statusText}`);
-          }
-          
-          const originalSize = parseInt(response.headers.get('X-Original-Size') || '0');
-          const compressedSize = parseInt(response.headers.get('X-Compressed-Size') || '0');
-          const compressionRatio = parseFloat(response.headers.get('X-Compression-Ratio') || '1');
-          const compressedBlob = await response.blob();
-          
-          setFiles(prev => prev.map(f => 
-            f.id === file.id 
-              ? { 
-                  ...f, 
-                  status: 'completed' as const,
-                  compressedSize,
-                  compressionRatio,
-                  compressedBlob,
-                }
-              : f
-          ));
-          
-        } catch (error) {
-          console.error(`Failed to compress ${file.name}:`, error);
-          setFiles(prev => prev.map(f => 
-            f.id === file.id 
-              ? { ...f, status: 'error' as const, error: error instanceof Error ? error.message : 'Unknown error' }
-              : f
-          ));
+        setProgress(100);
+
+      } else {
+        setFiles(prev => prev.map(f => filesToProcess.find(ftp => ftp.id === f.id) ? { ...f, status: 'processing' } : f));
+        for (const file of filesToProcess) {
+            const blob = await (await fetch(file.name)).blob();
+            formData.append('files', blob, file.name);
         }
-        
-        processedFiles++;
-        setProgress((processedFiles / totalFiles) * 100);
+
+        const response = await fetch('/api/compress/bulk', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Bulk compression failed: ${response.statusText}`);
+        }
+
+        const bulkBlob = await response.blob();
+        setBulkCompressedBlob(bulkBlob);
+        setFiles(prev => prev.map(f => filesToProcess.find(ftp => ftp.id === f.id) ? { ...f, status: 'completed' } : f));
+        setProgress(100);
       }
-      
     } catch (error) {
       console.error('Compression process failed:', error);
+      setFiles(prev => prev.map(f => f.status === 'processing' ? { ...f, status: 'error', error: error instanceof Error ? error.message : 'Unknown error' } : f));
     } finally {
       setIsProcessing(false);
     }
-  }, [files, settings]);
+  }, [files, settings, user, isLoading]);
 
   const downloadFile = useCallback((fileId: string) => {
     const file = files.find(f => f.id === fileId);
@@ -327,12 +337,24 @@ export default function Home() {
     }
   }, [files]);
 
+  const downloadBulkFiles = useCallback(() => {
+    if (bulkCompressedBlob) {
+      const url = URL.createObjectURL(bulkCompressedBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'compressed_files.zip';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+  }, [bulkCompressedBlob]);
+
   const clearFiles = useCallback(() => {
     setFiles([]);
     setProgress(0);
   }, []);
 
-  // Convert handlers
   const handleConvertFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(event.target.files || []);
     const newFiles: ConvertFileItem[] = selectedFiles.map(file => ({
@@ -387,7 +409,8 @@ export default function Home() {
         
         try {
           const formData = new FormData();
-          formData.append('file', new Blob([await (await fetch(file.name)).blob()]), file.name);
+          const blob = await (await fetch(file.name)).blob();
+          formData.append('file', blob, file.name);
           formData.append('format', convertSettings.format);
           formData.append('quality', convertSettings.quality);
           formData.append('preserveFormatting', convertSettings.preserveFormatting.toString());
@@ -456,7 +479,6 @@ export default function Home() {
     setConvertProgress(0);
   }, []);
 
-  // OCR handlers
   const handleOCRFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(event.target.files || []);
     const newFiles: OCRFileItem[] = selectedFiles.map(file => ({
@@ -511,7 +533,8 @@ export default function Home() {
         
         try {
           const formData = new FormData();
-          formData.append('file', new Blob([await (await fetch(file.name)).blob()]), file.name);
+          const blob = await (await fetch(file.name)).blob();
+          formData.append('file', blob, file.name);
           formData.append('language', ocrSettings.language);
           formData.append('outputFormat', ocrSettings.outputFormat);
           formData.append('preserveLayout', ocrSettings.preserveLayout.toString());
@@ -579,7 +602,6 @@ export default function Home() {
     setOcrProgress(0);
   }, []);
 
-  // AI Tools handlers
   const handleAIFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(event.target.files || []);
     const newFiles: AIFileItem[] = selectedFiles.map(file => ({
@@ -634,7 +656,8 @@ export default function Home() {
         
         try {
           const formData = new FormData();
-          formData.append('file', new Blob([await (await fetch(file.name)).blob()]), file.name);
+          const blob = await (await fetch(file.name)).blob();
+          formData.append('file', blob, file.name);
           formData.append('tool', aiSettings.tool);
           formData.append('detailLevel', aiSettings.detailLevel);
           
@@ -706,7 +729,6 @@ export default function Home() {
     setAiProgress(0);
   }, []);
 
-  // File Manager handlers
   const loadManagedFiles = useCallback(async () => {
     try {
       const response = await fetch('/api/files?action=list');
@@ -787,7 +809,6 @@ export default function Home() {
     }
   }, [loadManagedFiles, loadStorageInfo]);
 
-  // Utility functions
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -809,7 +830,6 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background p-4">
       <div className="max-w-6xl mx-auto space-y-8">
-        {/* Header */}
         <div className="text-center space-y-4">
           <div className="flex items-center justify-center gap-2">
             <Zap className="h-6 w-6 sm:h-8 sm:w-8 text-primary" />
@@ -820,8 +840,8 @@ export default function Home() {
           </p>
         </div>
 
-        <Tabs defaultValue="compress" className="w-full">
-          <TabsList className="grid w-full grid-cols-3 sm:grid-cols-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <TabsList className="hidden md:grid w-full grid-cols-3 sm:grid-cols-6">
             <TabsTrigger value="compress" className="text-xs sm:text-sm">Compress</TabsTrigger>
             <TabsTrigger value="convert" className="text-xs sm:text-sm">Convert</TabsTrigger>
             <TabsTrigger value="ocr" className="text-xs sm:text-sm">OCR</TabsTrigger>
@@ -830,7 +850,6 @@ export default function Home() {
             <TabsTrigger value="settings" className="text-xs sm:text-sm">Settings</TabsTrigger>
           </TabsList>
 
-          {/* Compression Tab */}
           <TabsContent value="compress" className="space-y-6">
             <div className="grid gap-6 lg:grid-cols-3">
               <Card className="lg:col-span-2">
@@ -949,6 +968,14 @@ export default function Home() {
                       >
                         Clear All
                       </Button>
+                      {bulkCompressedBlob && (
+                        <Button
+                            onClick={downloadBulkFiles}
+                            className="flex-1 w-full sm:w-auto"
+                        >
+                            Download All (.zip)
+                        </Button>
+                      )}
                     </div>
                   )}
                 </CardContent>
@@ -1038,7 +1065,6 @@ export default function Home() {
             </div>
           </TabsContent>
 
-          {/* Convert Tab */}
           <TabsContent value="convert">
             <div className="grid gap-6 lg:grid-cols-3">
               <Card className="lg:col-span-2">
@@ -1259,7 +1285,6 @@ export default function Home() {
             </div>
           </TabsContent>
 
-          {/* OCR Tab */}
           <TabsContent value="ocr">
             <div className="grid gap-6 lg:grid-cols-3">
               <Card className="lg:col-span-2">
@@ -1491,7 +1516,6 @@ export default function Home() {
             </div>
           </TabsContent>
 
-          {/* AI Tools Tab */}
           <TabsContent value="ai-tools">
             <div className="grid gap-6 lg:grid-cols-3">
               <Card className="lg:col-span-2">
@@ -1726,7 +1750,6 @@ export default function Home() {
             </div>
           </TabsContent>
 
-          {/* File Manager Tab */}
           <TabsContent value="files">
             <div className="space-y-6">
               <Card>
@@ -1740,7 +1763,6 @@ export default function Home() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                  {/* Storage Info */}
                   {storageInfo && (
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                       <Card>
@@ -1772,7 +1794,6 @@ export default function Home() {
                     </div>
                   )}
 
-                  {/* Search and Filter */}
                   <div className="flex flex-col sm:flex-row gap-4">
                     <div className="relative flex-1">
                       <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -1793,7 +1814,6 @@ export default function Home() {
                     </Button>
                   </div>
 
-                  {/* File List */}
                   <div className="space-y-3">
                     <h3 className="font-medium">Stored Files</h3>
                     <div className="space-y-2 max-h-96 overflow-y-auto">
@@ -1852,7 +1872,6 @@ export default function Home() {
             </div>
           </TabsContent>
 
-          {/* Settings Tab */}
           <TabsContent value="settings">
             <Card>
               <CardHeader>
