@@ -181,6 +181,7 @@ The payment flow is handled by integrating with the PayPal API.
 
 The following endpoints exist for other PDF processing tasks. They follow a similar pattern to the compression endpoints, accepting a file and options via `multipart/form-data`.
 
+
 - **`POST /api/convert`**: Converts a PDF to other formats.
 - **`POST /api/ocr`**: Performs OCR on a PDF.
 - **`POST /api/analyze`**: Analyzes a PDF for properties.

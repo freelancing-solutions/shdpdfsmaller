@@ -1,7 +1,8 @@
+// app/api/files/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { FileManagerService } from '@/lib/file-manager';
+import { ServerFileManagerService } from '@/lib/server-file-manager';
 
-const fileManager = FileManagerService.getInstance();
+const fileManager = ServerFileManagerService.getInstance();
 
 export async function GET(request: NextRequest) {
   try {
@@ -143,7 +144,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const storedFile = await fileManager.storeFile(file, category as any, processingDetails);
+    const storedFile = await fileManager.storeFile(
+      file, 
+      category as any, 
+      processingDetails
+    );
 
     return NextResponse.json({
       success: true,
