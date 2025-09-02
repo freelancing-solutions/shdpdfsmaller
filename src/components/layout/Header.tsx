@@ -76,8 +76,8 @@ export function Header() {
                                 <Button variant="link" onClick={() => handleNavClick('convert')}>Convert</Button>
                                 <Button variant="link" onClick={() => handleNavClick('ocr')}>OCR</Button>
                                 <Button variant="link" onClick={() => handleNavClick('ai-tools')}>AI Tools</Button>
-                                <Button variant="link" onClick={() => handleNavClick('files')}>Files</Button>
-                                <Button variant="link" onClick={() => handleNavClick('settings')}>Settings</Button>
+                                {/* <Button variant="link" onClick={() => handleNavClick('files')}>Files</Button>
+                                <Button variant="link" onClick={() => handleNavClick('settings')}>Settings</Button> */}
                                 <hr />
                                 {isLoading ? <p>Loading...</p> : user ? (
                                     <>

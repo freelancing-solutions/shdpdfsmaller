@@ -911,8 +911,8 @@ const handleConvertFileUpload = useCallback(async (event: React.ChangeEvent<HTML
             <TabsTrigger value="convert" className="text-xs sm:text-sm">Convert</TabsTrigger>
             <TabsTrigger value="ocr" className="text-xs sm:text-sm">OCR</TabsTrigger>
             <TabsTrigger value="ai-tools" className="text-xs sm:text-sm">AI Tools</TabsTrigger>
-            <TabsTrigger value="files" className="text-xs sm:text-sm">Files</TabsTrigger>
-            <TabsTrigger value="settings" className="text-xs sm:text-sm">Settings</TabsTrigger>
+            {/* <TabsTrigger value="files" className="text-xs sm:text-sm">Files</TabsTrigger>
+            <TabsTrigger value="settings" className="text-xs sm:text-sm">Settings</TabsTrigger> */}
           </TabsList>
 
           <TabsContent value="compress" className="space-y-6">
@@ -1815,7 +1815,7 @@ const handleConvertFileUpload = useCallback(async (event: React.ChangeEvent<HTML
             </div>
           </TabsContent>
 
-          <TabsContent value="files">
+          {/* <TabsContent value="files">
             <div className="space-y-6">
               <Card>
                 <CardHeader>
@@ -1956,7 +1956,7 @@ const handleConvertFileUpload = useCallback(async (event: React.ChangeEvent<HTML
                 </div>
               </CardContent>
             </Card>
-          </TabsContent>
+          </TabsContent> */}
         </Tabs>
       </div>
     </div>
