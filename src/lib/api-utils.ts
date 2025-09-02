@@ -1,4 +1,5 @@
 // lib/api-utils.ts
+
 import { NextRequest } from 'next/server';
 
 export interface FileValidationOptions {
@@ -85,9 +86,9 @@ export class APIFileHandler {
       }
 
       // Validate files
-      const allFiles = file ? [file, ...files] : files;
+      const allFiles = file ? [file, ...files.filter(f => f !== file)] : files;
       for (const f of allFiles) {
-        this.validateFile(f, { maxSize, allowedTypes });
+        await this.validateFile(f, { maxSize, allowedTypes });
       }
 
       // Check if file is required
@@ -106,10 +107,10 @@ export class APIFileHandler {
   /**
    * Validate a single file
    */
-  static validateFile(
+  static async validateFile(
     file: File,
     options: FileValidationOptions = {}
-  ): void {
+  ): Promise<void> {
     const {
       maxSize = this.DEFAULT_MAX_SIZE,
       allowedTypes = this.DEFAULT_ALLOWED_TYPES
@@ -128,40 +129,56 @@ export class APIFileHandler {
       throw new Error(`File size (${this.formatFileSize(file.size)}) exceeds ${maxSizeMB}MB limit`);
     }
 
-    // Check file type - be more flexible with type detection
-    const isValidType = this.isValidFileType(file, allowedTypes);
+    // Check file type with magic number check for PDFs
+    const isValidType = await this.isValidFileType(file, allowedTypes);
     if (!isValidType) {
-      throw new Error(`Unsupported file type. Expected: ${allowedTypes.join(', ')}, got: ${file.type || 'unknown'}`);
+      throw new Error(`Unsupported or invalid file type. Expected: ${allowedTypes.join(', ')}`);
     }
 
     console.log(`✓ File validated: ${file.name} (${this.formatFileSize(file.size)})`);
   }
 
   /**
-   * More robust file type validation
+   * More robust file type validation, including magic number check for PDFs.
    */
-  private static isValidFileType(file: File, allowedTypes: string[]): boolean {
-    // Check MIME type
+  private static async isValidFileType(file: File, allowedTypes: string[]): Promise<boolean> {
+    // For PDFs, perform a magic number check
+    if (allowedTypes.includes('application/pdf') && (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'))) {
+      try {
+        const first5Bytes = await file.slice(0, 5).arrayBuffer();
+        const uint8 = new Uint8Array(first5Bytes);
+        const magicNumber = String.fromCharCode.apply(null, Array.from(uint8));
+        
+        if (magicNumber === '%PDF-') {
+          return true; // It's a valid PDF
+        } else {
+          // If it was supposed to be a PDF but magic number doesn't match, it's invalid.
+          throw new Error('File is not a valid PDF. Header signature is missing.');
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.startsWith('File is not a valid PDF')) {
+          throw e;
+        }
+        throw new Error(`Error reading file header for PDF validation: ${e instanceof Error ? e.message : 'Unknown error'}`);
+      }
+    }
+
+    // Check MIME type for other file types
     if (file.type && allowedTypes.includes(file.type)) {
       return true;
     }
 
-    // Check file extension as fallback
+    // Check file extension as a fallback for non-PDF files
     const fileName = file.name.toLowerCase();
     for (const allowedType of allowedTypes) {
-      if (allowedType === 'application/pdf' && fileName.endsWith('.pdf')) {
-        return true;
+      if (allowedType !== 'application/pdf') {
+        const extension = allowedType.split('/')[1];
+        if (extension && fileName.endsWith(`.${extension}`)) {
+          return true;
+        }
       }
-      // Add other type checks as needed
     }
-
-    // For PDFs, also check if type is empty but name ends with .pdf
-    if (allowedTypes.includes('application/pdf') && 
-        (!file.type || file.type === '') && 
-        fileName.endsWith('.pdf')) {
-      return true;
-    }
-
+    
     return false;
   }
 
@@ -276,3 +293,4 @@ export class APIFileHandler {
     return value === 'true' || value === '1';
   }
 }
+''

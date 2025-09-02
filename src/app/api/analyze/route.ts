@@ -1,38 +1,22 @@
-import { NextRequest, NextResponse } from 'next/server';
+
+import { NextRequest } from 'next/server';
 import { PDFCompressionService } from '@/lib/pdf-compression';
+import { APIFileHandler } from '@/lib/api-utils';
+
+export const runtime = 'edge';
 
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData();
-    const file = formData.get('file') as File;
+    const { file } = await APIFileHandler.parseFormData(request);
 
     if (!file) {
-      return NextResponse.json(
-        { error: 'No file provided' },
-        { status: 400 }
-      );
-    }
-
-    if (file.type !== 'application/pdf') {
-      return NextResponse.json(
-        { error: 'Only PDF files are supported' },
-        { status: 400 }
-      );
-    }
-
-    // Check file size (limit to 50MB)
-    const maxSize = 50 * 1024 * 1024; // 50MB
-    if (file.size > maxSize) {
-      return NextResponse.json(
-        { error: 'File size exceeds 50MB limit' },
-        { status: 400 }
-      );
+      throw new Error('No file provided for analysis');
     }
 
     const compressionService = PDFCompressionService.getInstance();
     const analysis = await compressionService.analyzePDF(file);
 
-    return NextResponse.json({
+    const responseData = {
       success: true,
       analysis: {
         fileName: file.name,
@@ -45,19 +29,37 @@ export async function POST(request: NextRequest) {
           estimatedReduction: Math.round(analysis.compressionPotential * 100),
         },
       },
+    };
+
+    return new Response(JSON.stringify(responseData), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+      },
     });
 
   } catch (error) {
     console.error('Analysis API error:', error);
-    return NextResponse.json(
-      { error: 'Failed to analyze PDF' },
-      { status: 500 }
-    );
+    return APIFileHandler.createErrorResponse(error);
   }
 }
 
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 200,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    },
+  });
+}
+
 export async function GET() {
-  return NextResponse.json({
+  return Response.json({
     message: 'PDF Analysis API',
     endpoints: {
       analyze: 'POST /api/analyze - Analyze a PDF file for compression potential',
