@@ -160,7 +160,7 @@ export function SubscriptionDialog({ currentPlan = 'FREE' }: { currentPlan?: str
                       {currentPlan === plan.id ? 'Current Plan' : 'Free Tier'}
                     </Button>
                   ) : (
-                    <PayPalButton 
+                    <PayPalButton
                       planId={plan.id} 
                       className="w-full"
                       disabled={currentPlan === plan.id}
