@@ -90,7 +90,7 @@ curl -X POST "https://pdfsmaller.site/api/compress" \
 ### 6.2. Multiple Files using `curl`
 
 ```bash
-curl -X POST "https://pdfsmaller.siteapi/compress" \
+curl -X POST "https://pdfsmaller.site/api/compress" \
      -H "Content-Type: multipart/form-data" \
      -F "files=@/path/to/your/document1.pdf" \
      -F "files=@/path/to/your/document2.pdf" \

@@ -1,8 +1,8 @@
 // app/api/files/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { ServerFileManagerService } from '@/lib/server-file-manager';
+import { FileManagerService } from '@/lib/file-manager';
 
-const fileManager = ServerFileManagerService.getInstance();
+const fileManager = FileManagerService.getInstance();
 
 export async function GET(request: NextRequest) {
   try {
