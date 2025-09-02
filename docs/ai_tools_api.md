@@ -63,7 +63,7 @@ The request must be a `multipart/form-data` POST request.
 ### `curl` Example (Summarize)
 
 ```bash
-curl -X POST "http://your-server.com/api/ai-tools" \
+curl -X POST "https://pdfsmaller.site/api/ai-tools" \
      -H "Content-Type: multipart/form-data" \
      -F "file=@/path/to/your/long_document.pdf" \
      -F "tool=summarize" \
@@ -74,7 +74,7 @@ curl -X POST "http://your-server.com/api/ai-tools" \
 ### `curl` Example (Translate)
 
 ```bash
-curl -X POST "http://your-server.com/api/ai-tools" \
+curl -X POST "https://pdfsmaller.site/api/ai-tools" \
      -H "Content-Type: multipart/form-data" \
      -F "file=@/path/to/your/document.pdf" \
      -F "tool=translate" \

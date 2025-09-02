@@ -79,7 +79,7 @@ The request must be a `multipart/form-data` POST request.
 ### 6.1. Single File using `curl`
 
 ```bash
-curl -X POST "http://your-server.com/api/compress" \
+curl -X POST "https://pdfsmaller.site/api/compress" \
      -H "Content-Type: multipart/form-data" \
      -F "file=@/path/to/your/document.pdf" \
      -F "compressionLevel=high" \
@@ -90,7 +90,7 @@ curl -X POST "http://your-server.com/api/compress" \
 ### 6.2. Multiple Files using `curl`
 
 ```bash
-curl -X POST "http://your-server.com/api/compress" \
+curl -X POST "https://pdfsmaller.siteapi/compress" \
      -H "Content-Type: multipart/form-data" \
      -F "files=@/path/to/your/document1.pdf" \
      -F "files=@/path/to/your/document2.pdf" \

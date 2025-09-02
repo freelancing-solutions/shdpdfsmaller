@@ -67,7 +67,7 @@ The request must be a `multipart/form-data` POST request.
 ### `curl` Example (Convert to DOCX)
 
 ```bash
-curl -X POST "http://your-server.com/api/convert" \
+curl -X POST "https://pdfsmaller.site/api/convert" \
      -H "Content-Type: multipart/form-data" \
      -F "file=@/path/to/your/document.pdf" \
      -F "format=docx" \
@@ -78,7 +78,7 @@ curl -X POST "http://your-server.com/api/convert" \
 ### `curl` Example (Extract Images)
 
 ```bash
-curl -X POST "http://your-server.com/api/convert" \
+curl -X POST "https://pdfsmaller.site/api/convert" \
      -H "Content-Type: multipart/form-data" \
      -F "file=@/path/to/your/document.pdf" \
      -F "format=images" \

@@ -67,7 +67,7 @@ The request must be a `multipart/form-data` POST request.
 ### `curl` Example (Get Plain Text)
 
 ```bash
-curl -X POST "http://your-server.com/api/ocr" \
+curl -X POST "https://pdfsmaller.site/api/ocr" \
      -H "Content-Type: multipart/form-data" \
      -F "file=@/path/to/your/scanned_document.pdf" \
      -F "language=en" \
@@ -78,7 +78,7 @@ curl -X POST "http://your-server.com/api/ocr" \
 ### `curl` Example (Create Searchable PDF)
 
 ```bash
-curl -X POST "http://your-server.com/api/ocr" \
+curl -X POST "https://pdfsmaller.site/api/ocr" \
      -H "Content-Type: multipart/form-data" \
      -F "file=@/path/to/your/image_based_document.pdf" \
      -F "language=de" \
