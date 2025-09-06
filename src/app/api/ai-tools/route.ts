@@ -51,8 +51,8 @@ export async function POST(request: NextRequest) {
 
     const result = await aiService.processWithAI(file, options);
 
-    // The result from AI tools is typically text, so we create a text file response.
-    const textContent = result.processedFile; // Assuming processedFile is a string of text
+    // The result from AI tools is a Blob, so we convert it to text
+    const textContent = await result.processedFile.text();
     const textBuffer = new TextEncoder().encode(textContent);
 
     const filename = file.name.replace('.pdf', `_${tool}.txt`);

@@ -33,6 +33,7 @@ interface ConvertFileItem {
   name: string;
   size: number;
   type: string;
+  file?: File; // Add file reference
   format?: string;
   convertedSize?: number;
   convertedBlob?: Blob;
@@ -45,6 +46,7 @@ interface OCRFileItem {
   name: string;
   size: number;
   type: string;
+  file?: File; // Add file reference
   extractedText?: string;
   confidence?: number;
   processedBlob?: Blob;
@@ -57,6 +59,7 @@ interface AIFileItem {
   name: string;
   size: number;
   type: string;
+  file?: File; // Add file reference
   result?: any;
   processedBlob?: Blob;
   status: 'pending' | 'processing' | 'completed' | 'error';
@@ -421,6 +424,7 @@ const startCompression = useCallback(async () => {
       name: file.name,
       size: file.size,
       type: file.type,
+      file: file, // Store the actual File object
       status: 'pending' as const,
     }));
     
@@ -451,8 +455,12 @@ const startConversion = useCallback(async () => {
       ));
       
       try {
+        if (!fileItem.file) {
+          throw new Error('File object not found');
+        }
+        
         const convertedBlob = await APIClient.convertFile(
-          fileItem.file!,
+          fileItem.file,
           {
             format: convertSettings.format,
             quality: convertSettings.quality,
@@ -514,7 +522,7 @@ const handleConvertFileUpload = useCallback(async (event: React.ChangeEvent<HTML
         name: file.name,
         size: file.size,
         type: file.type || 'application/pdf',
-        file: file,
+        file: file, // Store the actual File object
         status: 'pending',
       });
     } else {
@@ -551,6 +559,7 @@ const handleConvertFileUpload = useCallback(async (event: React.ChangeEvent<HTML
       name: file.name,
       size: file.size,
       type: file.type,
+      file: file, // Store the actual File object
       status: 'pending' as const,
     }));
     
@@ -567,6 +576,7 @@ const handleConvertFileUpload = useCallback(async (event: React.ChangeEvent<HTML
       name: file.name,
       size: file.size,
       type: file.type,
+      file: file, // Store the actual File object
       status: 'pending' as const,
     }));
     
@@ -597,9 +607,12 @@ const handleConvertFileUpload = useCallback(async (event: React.ChangeEvent<HTML
         ));
         
         try {
+          if (!file.file) {
+            throw new Error('File object not found');
+          }
+          
           const formData = new FormData();
-          const blob = await (await fetch(file.name)).blob();
-          formData.append('file', blob, file.name);
+          formData.append('file', file.file);
           formData.append('language', ocrSettings.language);
           formData.append('outputFormat', ocrSettings.outputFormat);
           formData.append('preserveLayout', ocrSettings.preserveLayout.toString());
@@ -674,6 +687,7 @@ const handleConvertFileUpload = useCallback(async (event: React.ChangeEvent<HTML
       name: file.name,
       size: file.size,
       type: file.type,
+      file: file, // Store the actual File object
       status: 'pending' as const,
     }));
     
@@ -690,6 +704,7 @@ const handleConvertFileUpload = useCallback(async (event: React.ChangeEvent<HTML
       name: file.name,
       size: file.size,
       type: file.type,
+      file: file, // Store the actual File object
       status: 'pending' as const,
     }));
     
@@ -720,9 +735,12 @@ const handleConvertFileUpload = useCallback(async (event: React.ChangeEvent<HTML
         ));
         
         try {
+          if (!file.file) {
+            throw new Error('File object not found');
+          }
+          
           const formData = new FormData();
-          const blob = await (await fetch(file.name)).blob();
-          formData.append('file', blob, file.name);
+          formData.append('file', file.file);
           formData.append('tool', aiSettings.tool);
           formData.append('detailLevel', aiSettings.detailLevel);
           
