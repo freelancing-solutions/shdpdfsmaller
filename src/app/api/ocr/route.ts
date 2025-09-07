@@ -1,7 +1,7 @@
-
 import { NextRequest } from 'next/server';
 import { PDFOCRService } from '@/lib/pdf-ocr';
 import { APIFileHandler } from '@/lib/api-utils';
+
 
 export const runtime = 'edge';
 
@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
     
     const options = { language, outputFormat, preserveLayout, confidence };
 
+    // Call the refactored OCR service
     const result = await ocrService.processOCR(file, options);
 
     // Determine content type and file extension
@@ -66,11 +67,11 @@ export async function POST(request: NextRequest) {
       'Processed-Size': result.processedSize.toString(),
       'OCR-Confidence': result.confidence.toString(),
       'Processing-Time': result.processingTime.toString(),
-      'Output-Format': result.outputFormat,
+      'Output-Format': outputFormat,
     };
 
     return APIFileHandler.createFileResponse(
-      result.processedFile,
+      new Uint8Array(await result.processedFile.arrayBuffer()),
       filename,
       contentType,
       metadata
@@ -105,3 +106,5 @@ export async function GET() {
     maxFileSize: '50MB',
   });
 }
+
+

@@ -104,7 +104,7 @@ export async function POST(request: NextRequest) {
     };
 
     return APIFileHandler.createFileResponse(
-      result.convertedFile,
+      await result.convertedFile.arrayBuffer(),
       filename,
       contentType,
       metadata
