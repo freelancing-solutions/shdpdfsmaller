@@ -1,6 +1,5 @@
-
-
-import { PDFDocument, PDFDict, PDFArray, PDFName, PDFString, PDFNumber } from 'pdf-lib';
+import { PdfApiService } from './api/pdf-services';
+import { JobMonitor } from './api/job-monitor';
 
 export interface CompressionOptions {
   compressionLevel: 'low' | 'medium' | 'high' | 'maximum';
@@ -30,27 +29,26 @@ export class PDFCompressionService {
     try {
       const originalSize = file.size;
       
-      // Load the PDF document
-      const arrayBuffer = await file.arrayBuffer();
-      const pdfDoc = await PDFDocument.load(arrayBuffer);
+      // Create job via API
+      const jobId = await PdfApiService.createJob('/compress', this.createFormData(file, options));
+      
+      // Wait for job completion and get result
+      const resultBlob = await JobMonitor.executeWithJob(
+        () => Promise.resolve(jobId),
+        async (jobResponse) => {
+          if (jobResponse.status === 'completed') {
+            return await PdfApiService.downloadResult(jobId);
+          }
+          throw new Error(`Job failed: ${jobResponse.error}`);
+        }
+      );
 
-      // Apply compression based on settings
-      await this.applyCompression(pdfDoc, options);
-
-      // Save the compressed PDF
-      const compressedPdfBytes = await pdfDoc.save({
-        useObjectStreams: this.getUseObjectStreams(options.compressionLevel),
-        addDefaultPage: false,
-        objectsPerTick: this.getObjectsPerTick(options.compressionLevel),
-      });
-
-      const compressedBlob = new Blob([compressedPdfBytes], { type: 'application/pdf' });
-      const compressedSize = compressedBlob.size;
+      const compressedSize = resultBlob.size;
       const compressionRatio = compressedSize / originalSize;
       const reductionPercent = ((originalSize - compressedSize) / originalSize) * 100;
 
       return {
-        compressedFile: compressedBlob,
+        compressedFile: resultBlob,
         originalSize,
         compressedSize,
         compressionRatio,
@@ -63,134 +61,12 @@ export class PDFCompressionService {
     }
   }
 
-  private async applyCompression(pdfDoc: PDFDocument, options: CompressionOptions): Promise<void> {
-    const { compressionLevel, imageQuality } = options;
-
-    // Compress images if present
-    const pages = pdfDoc.getPages();
-    for (const page of pages) {
-      await this.compressPageImages(page, imageQuality, compressionLevel);
-    }
-
-    // Remove metadata for better compression (except for low compression level)
-    if (compressionLevel !== 'low') {
-      this.removeMetadata(pdfDoc);
-    }
-
-    // Optimize PDF structure based on compression level
-    this.optimizePDFStructure(pdfDoc, compressionLevel);
-  }
-
-  private async compressPageImages(page: any, quality: number, compressionLevel: string): Promise<void> {
-    try {
-      // Get images from the page
-      const resources = page.node.get('Resources') as PDFDict;
-      if (!resources) return;
-
-      const xObject = resources.get('XObject') as PDFDict;
-      if (!xObject) return;
-
-      // Process each image
-      const xObjectKeys = xObject.keys();
-      for (const key of xObjectKeys) {
-        const xObjectEntry = xObject.get(key);
-        if (xObjectEntry instanceof PDFDict) {
-          const subtype = xObjectEntry.get(PDFName.of('Subtype'));
-          if (subtype && subtype.toString() === '/Image') {
-            await this.compressImage(xObjectEntry, quality, compressionLevel);
-          }
-        }
-      }
-    } catch (error) {
-      console.warn('Failed to compress page images:', error);
-    }
-  }
-
-  private async compressImage(imageDict: PDFDict, quality: number, compressionLevel: string): Promise<void> {
-    try {
-      // For high and maximum compression, we can apply additional image optimizations
-      if (compressionLevel === 'high' || compressionLevel === 'maximum') {
-        // Remove unnecessary image metadata
-        const keysToRemove = ['ColorSpace', 'Decode', 'DecodeParms', 'Interpolate', 'SMask'];
-        for (const key of keysToRemove) {
-          if (imageDict.has(PDFName.of(key))) {
-            imageDict.delete(PDFName.of(key));
-          }
-        }
-      }
-    } catch (error) {
-      console.warn('Failed to compress individual image:', error);
-    }
-  }
-
-  private removeMetadata(pdfDoc: PDFDocument): void {
-    try {
-      // Clear document information
-      pdfDoc.setTitle('');
-      pdfDoc.setAuthor('');
-      pdfDoc.setSubject('');
-      pdfDoc.setKeywords([]);
-      pdfDoc.setProducer('');
-      pdfDoc.setCreator('');
-    } catch (error) {
-      console.warn('Failed to remove metadata:', error);
-    }
-  }
-
-  private optimizePDFStructure(pdfDoc: PDFDocument, compressionLevel: string): void {
-    try {
-      // For maximum compression, we can apply additional optimizations
-      if (compressionLevel === 'maximum') {
-        // Flatten the PDF structure where possible
-        this.flattenPDFStructure(pdfDoc);
-      }
-    } catch (error) {
-      console.warn('Failed to optimize PDF structure:', error);
-    }
-  }
-
-  private flattenPDFStructure(pdfDoc: PDFDocument): void {
-    // This is a placeholder for more advanced flattening operations
-    // In a real implementation, you might merge objects, remove unused resources, etc.
-    try {
-      // Remove unused objects and optimize the PDF structure
-      // This is a simplified version - real implementation would be more complex
-      const pageCount = pdfDoc.getPageCount();
-      if (pageCount > 1) {
-        // For multi-page documents, we can optimize page sharing
-        // This is just a placeholder for actual optimization logic
-      }
-    } catch (error) {
-      console.warn('Failed to flatten PDF structure:', error);
-    }
-  }
-
-  private getUseObjectStreams(compressionLevel: string): boolean {
-    switch (compressionLevel) {
-      case 'low':
-        return false;
-      case 'medium':
-      case 'high':
-      case 'maximum':
-        return true;
-      default:
-        return true;
-    }
-  }
-
-  private getObjectsPerTick(compressionLevel: string): number {
-    switch (compressionLevel) {
-      case 'low':
-        return 20;
-      case 'medium':
-        return 50;
-      case 'high':
-        return 100;
-      case 'maximum':
-        return 200;
-      default:
-        return 50;
-    }
+  private createFormData(file: File, options: CompressionOptions): FormData {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('compressionLevel', options.compressionLevel);
+    formData.append('imageQuality', options.imageQuality.toString());
+    return formData;
   }
 
   async analyzePDF(file: File): Promise<{
@@ -200,19 +76,14 @@ export class PDFCompressionService {
     recommendedSettings: CompressionOptions;
   }> {
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const pdfDoc = await PDFDocument.load(arrayBuffer);
+      // For analysis, we'll use a lightweight approach since we can't access PDF internals
+      // via API. We'll estimate based on file size and type.
       
-      const pageCount = pdfDoc.getPageCount();
       const size = file.size;
       
-      // Calculate compression potential based on file characteristics
+      // Simple estimation - in a real implementation, you might want to create
+      // a separate analysis endpoint or use a different approach
       let compressionPotential = 0.3; // Base 30% potential
-      
-      // Adjust based on page count
-      if (pageCount > 10) {
-        compressionPotential += 0.1; // Multi-page docs compress better
-      }
       
       // Adjust based on file size
       if (size > 5 * 1024 * 1024) { // > 5MB
@@ -234,7 +105,7 @@ export class PDFCompressionService {
       }
       
       return {
-        pageCount,
+        pageCount: this.estimatePageCount(size), // Estimated page count
         size,
         compressionPotential: Math.max(0.1, Math.min(0.8, compressionPotential)),
         recommendedSettings: {
@@ -248,6 +119,11 @@ export class PDFCompressionService {
     }
   }
 
+  private estimatePageCount(fileSize: number): number {
+    // Simple estimation: ~100KB per page on average
+    return Math.max(1, Math.round(fileSize / (100 * 1024)));
+  }
+
   async batchCompress(files: File[], options: CompressionOptions): Promise<CompressionResult[]> {
     const results: CompressionResult[] = [];
     
@@ -257,9 +133,9 @@ export class PDFCompressionService {
         results.push(result);
       } catch (error) {
         console.error(`Failed to compress file ${files[i].name}:`, error);
-        // Add a failed result
+        // Add a failed result with original file
         results.push({
-          compressedFile: new Blob([]),
+          compressedFile: files[i],
           originalSize: files[i].size,
           compressedSize: files[i].size,
           compressionRatio: 1,

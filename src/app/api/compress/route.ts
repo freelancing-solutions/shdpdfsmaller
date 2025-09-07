@@ -1,4 +1,4 @@
-
+// this is the api service it calls the lib tool which calls an api handles compression then returns the result to this file.
 import { NextRequest } from 'next/server';
 import { PDFCompressionService } from '@/lib/pdf-compression';
 import { APIFileHandler } from '@/lib/api-utils';
@@ -35,7 +35,7 @@ async function handleSingleCompression(file: File, params: Record<string, string
 
     // Return compressed file
     return APIFileHandler.createFileResponse(
-      result.compressedFile,
+      await result.compressedFile.arrayBuffer(),
       file.name.replace('.pdf', '_compressed.pdf'),
       'application/pdf',
       {
@@ -88,7 +88,7 @@ async function handleBulkCompression(files: File[], params: Record<string, strin
     const firstFile = files[0];
 
     return APIFileHandler.createFileResponse(
-      firstResult.compressedFile,
+      await firstResult.compressedFile.arrayBuffer(),
       firstFile.name.replace('.pdf', '_compressed.pdf'),
       'application/pdf',
       {
