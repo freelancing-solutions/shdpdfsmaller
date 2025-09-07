@@ -6,20 +6,41 @@ export interface JobResponse {
   error?: string;
 }
 
+export interface CompressionSettings {
+  compressionLevel: 'low' | 'medium' | 'high' | 'maximum';
+  imageQuality: number; // 10-100
+}
+
+export interface ConversionOptions {
+  preserveLayout?: boolean;
+  extractTables?: boolean;
+  extractImages?: boolean;
+  quality?: 'low' | 'medium' | 'high';
+}
+
+export interface OCROptions {
+  language?: string;
+  quality?: 'fast' | 'balanced' | 'accurate';
+  outputFormat?: 'searchable_pdf' | 'text' | 'json';
+}
+
+export interface AIOptions {
+  style?: 'concise' | 'detailed' | 'academic' | 'casual' | 'professional';
+  maxLength?: 'short' | 'medium' | 'long';
+  targetLanguage?: string; // ISO language code
+}
+
 export class PdfApiService {
   private static readonly BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.pdfsmaller.site/api';
   private static readonly DEFAULT_TIMEOUT = 300000;
   private static readonly POLL_INTERVAL = 2000;
 
-  // Helper to check if we're in browser environment
   private static isBrowser(): boolean {
     return typeof window !== 'undefined';
   }
 
-  // Helper to create timeout signal
   private static createTimeoutSignal(timeout: number): AbortSignal {
     if (typeof AbortSignal === 'undefined' || !AbortSignal.timeout) {
-      // Fallback for environments without AbortSignal.timeout
       const controller = new AbortController();
       setTimeout(() => controller.abort(), timeout);
       return controller.signal;
@@ -33,7 +54,7 @@ export class PdfApiService {
     timeout: number = this.DEFAULT_TIMEOUT
   ): Promise<string> {
     if (!this.isBrowser()) {
-      throw new Error('PDF compression is only available in browser environment');
+      throw new Error('API calls are only available in browser environment');
     }
 
     try {
@@ -148,4 +169,84 @@ export class PdfApiService {
       return false;
     }
   }
+
+  // New API methods based on tools.md
+  static async compressPdf(
+    file: File,
+    settings: CompressionSettings,
+    clientJobId?: string
+  ): Promise<string> {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('compressionLevel', settings.compressionLevel);
+    formData.append('imageQuality', settings.imageQuality.toString());
+    
+    if (clientJobId) {
+      formData.append('client_job_id', clientJobId);
+    }
+
+    return this.createJob('/compress', formData);
+  }
+
+  static async convertPdf(
+    file: File,
+    targetFormat: 'docx' | 'xlsx' | 'txt' | 'html' | 'images',
+    options: ConversionOptions = {},
+    clientJobId?: string
+  ): Promise<string> {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('options', JSON.stringify(options));
+    
+    if (clientJobId) {
+      formData.append('client_job_id', clientJobId);
+    }
+
+    return this.createJob(`/convert/pdf-to-${targetFormat}`, formData);
+  }
+
+  static async processOCR(
+    file: File,
+    options: OCROptions = {},
+    clientJobId?: string
+  ): Promise<string> {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('options', JSON.stringify(options));
+    
+    if (clientJobId) {
+      formData.append('client_job_id', clientJobId);
+    }
+
+    return this.createJob('/ocr/process', formData);
+  }
+
+  static async summarizeText(
+    text: string,
+    options: AIOptions = {},
+    clientJobId?: string
+  ): Promise<string> {
+    const response = await fetch(`${this.BASE_URL}/ai/summarize`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        text,
+        options,
+        client_job_id: clientJobId,
+      }),
+      signal: this.createTimeoutSignal(this.DEFAULT_TIMEOUT),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API error: ${response.status} ${response.statusText} - ${errorText}`);
+    }
+
+    const data: JobResponse = await response.json();
+    return data.job_id;
+  }
 }
+
+

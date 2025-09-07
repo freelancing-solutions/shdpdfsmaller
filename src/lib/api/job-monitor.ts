@@ -91,7 +91,7 @@ export class JobMonitor {
 
 // Client-side only utility function
 export async function createAndMonitorJob<T>(
-  endpoint: string,
+  apiCall: (file: File, options: any) => Promise<string>,
   file: File,
   options: any,
   processResult: (blob: Blob) => Promise<T>,
@@ -104,18 +104,7 @@ export async function createAndMonitorJob<T>(
 
   return JobMonitor.executeWithJob(
     async () => {
-      const formData = new FormData();
-      formData.append('file', file);
-      
-      Object.keys(options).forEach(key => {
-        if (typeof options[key] === 'object') {
-          formData.append(key, JSON.stringify(options[key]));
-        } else {
-          formData.append(key, options[key].toString());
-        }
-      });
-
-      return PdfApiService.createJob(endpoint, formData);
+      return apiCall(file, options);
     },
     async (jobResponse) => {
       if (jobResponse.status === 'completed') {
@@ -127,3 +116,5 @@ export async function createAndMonitorJob<T>(
     monitorOptions
   );
 }
+
+
