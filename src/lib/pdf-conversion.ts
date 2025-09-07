@@ -1,5 +1,5 @@
-import { PdfApiService } from './pdf-services';
-import { JobMonitor } from './job-monitor';
+import { PdfApiService } from './api/pdf-services';
+import { JobMonitor } from './api/job-monitor';
 
 export interface ConversionOptions {
   format: 'docx' | 'txt' | 'html' | 'images';
