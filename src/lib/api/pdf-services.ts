@@ -1,3 +1,4 @@
+// lib/api/pdf-services.ts
 export interface JobResponse {
   job_id: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';
@@ -31,37 +32,19 @@ export interface AIOptions {
 }
 
 export class PdfApiService {
-  private static readonly BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.pdfsmaller.site/api';
+  private static readonly BASE_URL = process.env.API_URL || 'https://api.pdfsmaller.site/api';
   private static readonly DEFAULT_TIMEOUT = 300000;
   private static readonly POLL_INTERVAL = 2000;
-
-  private static isBrowser(): boolean {
-    return typeof window !== 'undefined';
-  }
-
-  private static createTimeoutSignal(timeout: number): AbortSignal {
-    if (typeof AbortSignal === 'undefined' || !AbortSignal.timeout) {
-      const controller = new AbortController();
-      setTimeout(() => controller.abort(), timeout);
-      return controller.signal;
-    }
-    return AbortSignal.timeout(timeout);
-  }
 
   static async createJob(
     endpoint: string,
     formData: FormData,
     timeout: number = this.DEFAULT_TIMEOUT
   ): Promise<string> {
-    if (!this.isBrowser()) {
-      throw new Error('API calls are only available in browser environment');
-    }
-
     try {
       const response = await fetch(`${this.BASE_URL}${endpoint}`, {
         method: 'POST',
         body: formData,
-        signal: this.createTimeoutSignal(timeout),
       });
 
       if (!response.ok) {
@@ -77,22 +60,13 @@ export class PdfApiService {
 
       return data.job_id;
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error('Request timeout exceeded');
-      }
-      throw error;
+      throw new Error(`Job creation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
   static async getJobStatus(jobId: string): Promise<JobResponse> {
-    if (!this.isBrowser()) {
-      throw new Error('Job status checking is only available in browser environment');
-    }
-
     try {
-      const response = await fetch(`${this.BASE_URL}/jobs/${jobId}`, {
-        signal: this.createTimeoutSignal(10000),
-      });
+      const response = await fetch(`${this.BASE_URL}/jobs/${jobId}`);
       
       if (!response.ok) {
         throw new Error(`Failed to get job status: ${response.status}`);
@@ -105,14 +79,8 @@ export class PdfApiService {
   }
 
   static async downloadResult(jobId: string): Promise<Blob> {
-    if (!this.isBrowser()) {
-      throw new Error('Download is only available in browser environment');
-    }
-
     try {
-      const response = await fetch(`${this.BASE_URL}/jobs/${jobId}/download`, {
-        signal: this.createTimeoutSignal(30000),
-      });
+      const response = await fetch(`${this.BASE_URL}/jobs/${jobId}/download`);
       
       if (!response.ok) {
         throw new Error(`Failed to download result: ${response.status}`);
@@ -159,18 +127,6 @@ export class PdfApiService {
     throw new Error('Job timeout exceeded');
   }
 
-  static async checkHealth(): Promise<boolean> {
-    try {
-      const response = await fetch(`${this.BASE_URL}/health`, {
-        signal: this.createTimeoutSignal(5000),
-      });
-      return response.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  // New API methods based on tools.md
   static async compressPdf(
     file: File,
     settings: CompressionSettings,
@@ -236,7 +192,6 @@ export class PdfApiService {
         options,
         client_job_id: clientJobId,
       }),
-      signal: this.createTimeoutSignal(this.DEFAULT_TIMEOUT),
     });
 
     if (!response.ok) {
@@ -248,5 +203,3 @@ export class PdfApiService {
     return data.job_id;
   }
 }
-
-

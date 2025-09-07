@@ -1,3 +1,4 @@
+// lib/api/job-monitor.ts
 import { PdfApiService, JobResponse } from './pdf-services';
 
 export interface JobMonitorOptions {
@@ -88,33 +89,3 @@ export class JobMonitor {
     throw lastError ?? new Error('Operation failed after maximum retries');
   }
 }
-
-// Client-side only utility function
-export async function createAndMonitorJob<T>(
-  apiCall: (file: File, options: any) => Promise<string>,
-  file: File,
-  options: any,
-  processResult: (blob: Blob) => Promise<T>,
-  monitorOptions: JobMonitorOptions = {}
-): Promise<T> {
-  // This function is only for browser use
-  if (typeof window === 'undefined') {
-    throw new Error('This function is only available in browser environment');
-  }
-
-  return JobMonitor.executeWithJob(
-    async () => {
-      return apiCall(file, options);
-    },
-    async (jobResponse) => {
-      if (jobResponse.status === 'completed') {
-        const blob = await PdfApiService.downloadResult(jobResponse.job_id);
-        return processResult(blob);
-      }
-      throw new Error(`Job failed: ${jobResponse.error}`);
-    },
-    monitorOptions
-  );
-}
-
-
