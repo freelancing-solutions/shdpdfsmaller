@@ -1,4 +1,5 @@
 // lib/api/job-monitor.ts
+
 import { PdfApiService, JobResponse } from './pdf-services';
 
 export interface JobMonitorOptions {
@@ -16,7 +17,7 @@ export class JobMonitor {
   ): Promise<T> {
     const {
       checkInterval = 2000,
-      timeout = 300000,
+      timeout = 30000,
       onProgress,
       onError
     } = options;

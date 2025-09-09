@@ -1,34 +1,18 @@
-// lib/api/pdf-services.ts
+// lib/api/pdf-services.ts - Fixed for Next.js backend usage
+
 export interface JobResponse {
   job_id: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';
-  message: string;
+  message?: string;
   result?: any;
   error?: string;
+  download_url?: string;
+  download_available?: boolean;
 }
 
 export interface CompressionSettings {
   compressionLevel: 'low' | 'medium' | 'high' | 'maximum';
-  imageQuality: number; // 10-100
-}
-
-export interface ConversionOptions {
-  preserveLayout?: boolean;
-  extractTables?: boolean;
-  extractImages?: boolean;
-  quality?: 'low' | 'medium' | 'high';
-}
-
-export interface OCROptions {
-  language?: string;
-  quality?: 'fast' | 'balanced' | 'accurate';
-  outputFormat?: 'searchable_pdf' | 'text' | 'json';
-}
-
-export interface AIOptions {
-  style?: 'concise' | 'detailed' | 'academic' | 'casual' | 'professional';
-  maxLength?: 'short' | 'medium' | 'long';
-  targetLanguage?: string; // ISO language code
+  imageQuality: number;
 }
 
 export interface RetryConfig {
@@ -41,11 +25,10 @@ export interface RetryConfig {
 }
 
 export class PdfApiService {
-  private static readonly BASE_URL = process.env.API_URL || 'https://api.pdfsmaller.site/api';
+  private static readonly BASE_URL = process.env.FLASK_API_URL || 'https://api.pdfsmaller.site/api';
   private static readonly DEFAULT_TIMEOUT = 300000;
   private static readonly POLL_INTERVAL = 2000;
 
-  // Default retry configuration
   private static readonly DEFAULT_RETRY_CONFIG: RetryConfig = {
     maxRetries: 3,
     initialDelayMs: 1000,
@@ -64,7 +47,7 @@ export class PdfApiService {
 
     for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
       try {
-        // Use Promise.race to implement timeout
+        // Create timeout promise
         const timeoutPromise = new Promise<never>((_, reject) => {
           setTimeout(() => reject(new Error(`Operation timed out after ${retryConfig.timeoutMs}ms`)), retryConfig.timeoutMs);
         });
@@ -74,20 +57,18 @@ export class PdfApiService {
       } catch (error) {
         lastError = error as Error;
 
-        // Check if this error should be retried
         const shouldRetry = this.shouldRetry(error as Error, attempt, retryConfig);
         
         if (!shouldRetry) {
           break;
         }
 
-        // Calculate delay with exponential backoff and jitter
         const delay = Math.min(
           retryConfig.initialDelayMs * Math.pow(retryConfig.backoffFactor, attempt),
           retryConfig.maxDelayMs
-        ) + Math.random() * 1000; // Add jitter
+        ) + Math.random() * 1000;
 
-        console.warn(`Attempt ${attempt + 1} failed. Retrying in ${Math.round(delay)}ms. Error: ${lastError.message}`);
+        console.warn(`[PdfApiService] Attempt ${attempt + 1} failed. Retrying in ${Math.round(delay)}ms. Error: ${lastError.message}`);
 
         if (attempt < retryConfig.maxRetries) {
           await new Promise(resolve => setTimeout(resolve, delay));
@@ -95,7 +76,7 @@ export class PdfApiService {
       }
     }
 
-    throw new Error(`All ${retryConfig.maxRetries} attempts failed. Last error: ${lastError?.message}`);
+    throw new Error(`All ${retryConfig.maxRetries + 1} attempts failed. Last error: ${lastError?.message}`);
   }
 
   private static shouldRetry(error: Error, attempt: number, config: RetryConfig): boolean {
@@ -103,27 +84,72 @@ export class PdfApiService {
       return false;
     }
 
-    // Check for network/timeout errors
-    if (error.message.includes('timeout') || error.message.includes('504') || error.message.includes('network')) {
+    // Network/timeout errors
+    if (error.message.includes('timeout') || 
+        error.message.includes('ECONNRESET') || 
+        error.message.includes('ETIMEDOUT') ||
+        error.message.includes('network') ||
+        error.message.includes('fetch')) {
       return true;
     }
 
-    // Check for retryable HTTP status codes
-    const statusMatch = error.message.match(/API error: (\d+)/);
+    // HTTP status code errors
+    const statusMatch = error.message.match(/(?:status|error).*?(\d{3})/i);
     if (statusMatch) {
       const statusCode = parseInt(statusMatch[1], 10);
       return config.retryableStatusCodes.includes(statusCode);
     }
 
-    // Don't retry on client errors (4xx) except 408 and 429
-    if (error.message.includes('API error: 4') && 
-        !error.message.includes('API error: 408') && 
-        !error.message.includes('API error: 429')) {
-      return false;
+    return false;
+  }
+
+  private static async makeRequest(url: string, options: RequestInit = {}): Promise<Response> {
+    const defaultHeaders: Record<string, string> = {
+      'Accept': 'application/json',
+    };
+
+    // Don't set Content-Type for FormData - let browser set it with boundary
+    if (!(options.body instanceof FormData)) {
+      defaultHeaders['Content-Type'] = 'application/json';
     }
 
-    // Retry on other server errors
-    return error.message.includes('API error: 5');
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        ...defaultHeaders,
+        ...options.headers,
+      },
+    });
+
+    return response;
+  }
+
+  private static async handleResponse(response: Response): Promise<any> {
+    if (!response.ok) {
+      let errorMessage = `HTTP ${response.status}`;
+      
+      try {
+        const contentType = response.headers.get('content-type');
+        if (contentType?.includes('application/json')) {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorData.message || errorMessage;
+        } else {
+          const textError = await response.text();
+          errorMessage = textError || errorMessage;
+        }
+      } catch (parseError) {
+        console.warn('[PdfApiService] Failed to parse error response:', parseError);
+      }
+
+      throw new Error(`API error ${response.status}: ${errorMessage}`);
+    }
+
+    const contentType = response.headers.get('content-type');
+    if (contentType?.includes('application/json')) {
+      return await response.json();
+    }
+    
+    return await response.blob();
   }
 
   static async createJob(
@@ -133,22 +159,21 @@ export class PdfApiService {
     retryConfig: Partial<RetryConfig> = {}
   ): Promise<string> {
     return this.withRetry(async () => {
-      const response = await fetch(`${this.BASE_URL}${endpoint}`, {
+      const url = `${this.BASE_URL}${endpoint}`;
+      console.log(`[PdfApiService] Creating job at: ${url}`);
+      
+      const response = await this.makeRequest(url, {
         method: 'POST',
         body: formData,
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`API error: ${response.status} ${response.statusText} - ${errorText}`);
-      }
-
-      const data: JobResponse = await response.json();
+      const data: JobResponse = await this.handleResponse(response);
       
       if (!data.job_id) {
         throw new Error('No job ID received from API');
       }
 
+      console.log(`[PdfApiService] Job created: ${data.job_id}`);
       return data.job_id;
     }, { ...retryConfig, timeoutMs: timeout });
   }
@@ -157,14 +182,24 @@ export class PdfApiService {
     jobId: string, 
     retryConfig: Partial<RetryConfig> = {}
   ): Promise<JobResponse> {
+    if (!jobId || typeof jobId !== 'string' || jobId.trim().length === 0) {
+      throw new Error('Invalid job ID provided');
+    }
+
     return this.withRetry(async () => {
-      const response = await fetch(`${this.BASE_URL}/jobs/${jobId}`);
+      const url = `${this.BASE_URL}/jobs/${encodeURIComponent(jobId.trim())}`;
       
-      if (!response.ok) {
-        throw new Error(`Failed to get job status: ${response.status}`);
+      const response = await this.makeRequest(url, {
+        method: 'GET',
+      });
+
+      const jobResponse: JobResponse = await this.handleResponse(response);
+      
+      if (!jobResponse.job_id) {
+        throw new Error('Invalid job response: missing job_id');
       }
 
-      return await response.json();
+      return jobResponse;
     }, retryConfig);
   }
 
@@ -172,15 +207,28 @@ export class PdfApiService {
     jobId: string, 
     retryConfig: Partial<RetryConfig> = {}
   ): Promise<Blob> {
+    if (!jobId || typeof jobId !== 'string' || jobId.trim().length === 0) {
+      throw new Error('Invalid job ID provided');
+    }
+
     return this.withRetry(async () => {
-      const response = await fetch(`${this.BASE_URL}/jobs/${jobId}/download`);
+      const url = `${this.BASE_URL}/jobs/${encodeURIComponent(jobId.trim())}/download`;
       
-      if (!response.ok) {
-        throw new Error(`Failed to download result: ${response.status}`);
+      const response = await this.makeRequest(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/pdf, application/octet-stream'
+        }
+      });
+
+      const blob = await this.handleResponse(response);
+      
+      if (!(blob instanceof Blob) || blob.size === 0) {
+        throw new Error('Downloaded file is empty or invalid');
       }
 
-      return await response.blob();
-    }, retryConfig);
+      return blob;
+    }, { ...retryConfig, timeoutMs: 60000 }); // Longer timeout for downloads
   }
 
   static async waitForJobCompletion(
@@ -189,14 +237,30 @@ export class PdfApiService {
     timeout: number = this.DEFAULT_TIMEOUT,
     retryConfig: Partial<RetryConfig> = {}
   ): Promise<JobResponse> {
+    if (!jobId || typeof jobId !== 'string' || jobId.trim().length === 0) {
+      throw new Error('Invalid job ID provided');
+    }
+
     const startTime = Date.now();
+    let consecutiveErrors = 0;
+    const maxConsecutiveErrors = 5;
+
+    console.log(`[PdfApiService] Waiting for job completion: ${jobId}`);
 
     while (Date.now() - startTime < timeout) {
       try {
-        const status = await this.getJobStatus(jobId, retryConfig);
+        const status = await this.getJobStatus(jobId, {
+          ...retryConfig,
+          maxRetries: 1 // Reduce retries during polling
+        });
+
+        consecutiveErrors = 0; // Reset on success
+
+        console.log(`[PdfApiService] Job ${jobId} status: ${status.status}`);
 
         switch (status.status) {
           case 'completed':
+            console.log(`[PdfApiService] Job ${jobId} completed successfully`);
             return status;
           case 'failed':
             throw new Error(`Job failed: ${status.error || 'Unknown error'}`);
@@ -205,21 +269,28 @@ export class PdfApiService {
             await new Promise(resolve => setTimeout(resolve, checkInterval));
             break;
           default:
-            throw new Error(`Unknown job status: ${status.status}`);
+            console.warn(`[PdfApiService] Unknown job status: ${status.status}`);
+            await new Promise(resolve => setTimeout(resolve, checkInterval));
+            break;
         }
       } catch (error) {
+        consecutiveErrors++;
+        
         if (error instanceof Error && error.message.includes('Job failed')) {
           throw error;
         }
         
-        // For polling errors, we'll continue polling unless we hit timeout
+        if (consecutiveErrors >= maxConsecutiveErrors) {
+          throw new Error(`Job monitoring failed after ${maxConsecutiveErrors} consecutive errors. Last error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+        
         const elapsed = Date.now() - startTime;
         if (elapsed >= timeout) {
           throw new Error('Job timeout exceeded');
         }
         
-        console.warn('Polling error, will retry:', error);
-        await new Promise(resolve => setTimeout(resolve, checkInterval));
+        console.warn(`[PdfApiService] Polling error ${consecutiveErrors}/${maxConsecutiveErrors}, will retry:`, error);
+        await new Promise(resolve => setTimeout(resolve, checkInterval * Math.max(1, consecutiveErrors)));
       }
     }
 
@@ -232,6 +303,10 @@ export class PdfApiService {
     clientJobId?: string,
     retryConfig: Partial<RetryConfig> = {}
   ): Promise<string> {
+    if (!file || file.size === 0) {
+      throw new Error('Invalid file provided');
+    }
+
     const formData = new FormData();
     formData.append('file', file);
     formData.append('compressionLevel', settings.compressionLevel);
@@ -244,67 +319,18 @@ export class PdfApiService {
     return this.createJob('/compress', formData, this.DEFAULT_TIMEOUT, retryConfig);
   }
 
-  static async convertPdf(
-    file: File,
-    targetFormat: 'docx' | 'xlsx' | 'txt' | 'html' | 'images',
-    options: ConversionOptions = {},
-    clientJobId?: string,
-    retryConfig: Partial<RetryConfig> = {}
-  ): Promise<string> {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('options', JSON.stringify(options));
-    
-    if (clientJobId) {
-      formData.append('client_job_id', clientJobId);
-    }
-
-    return this.createJob(`/convert/pdf-to-${targetFormat}`, formData, this.DEFAULT_TIMEOUT, retryConfig);
-  }
-
-  static async processOCR(
-    file: File,
-    options: OCROptions = {},
-    clientJobId?: string,
-    retryConfig: Partial<RetryConfig> = {}
-  ): Promise<string> {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('options', JSON.stringify(options));
-    
-    if (clientJobId) {
-      formData.append('client_job_id', clientJobId);
-    }
-
-    return this.createJob('/ocr/process', formData, this.DEFAULT_TIMEOUT, retryConfig);
-  }
-
-  static async summarizeText(
-    text: string,
-    options: AIOptions = {},
-    clientJobId?: string,
-    retryConfig: Partial<RetryConfig> = {}
-  ): Promise<string> {
-    return this.withRetry(async () => {
-      const response = await fetch(`${this.BASE_URL}/ai/summarize`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          text,
-          options,
-          client_job_id: clientJobId,
-        }),
+  // Health check method
+  static async healthCheck(): Promise<boolean> {
+    try {
+      const response = await this.makeRequest(`${this.BASE_URL}/health`, {
+        method: 'GET',
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`API error: ${response.status} ${response.statusText} - ${errorText}`);
-      }
-
-      const data: JobResponse = await response.json();
-      return data.job_id;
-    }, retryConfig);
+      
+      const health = await this.handleResponse(response);
+      return health.success === true;
+    } catch (error) {
+      console.error('[PdfApiService] Health check failed:', error);
+      return false;
+    }
   }
 }
