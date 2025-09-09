@@ -193,8 +193,9 @@ export class PdfApiService {
         method: 'GET',
       });
 
-      const jobResponse: JobResponse = await this.handleResponse(response);
-      
+      const envelope = await this.handleResponse(response);   // ← new
+      const jobResponse: JobResponse = envelope?.data ?? envelope; // ← unwrap
+
       if (!jobResponse.job_id) {
         throw new Error('Invalid job response: missing job_id');
       }
