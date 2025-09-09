@@ -1,117 +1,59 @@
 // app/api/convert/route.ts
 import { NextRequest } from 'next/server';
-import { PDFConversionService } from '@/lib/pdf-conversion';
+import { PdfApiService } from '@/lib/api/pdf-services';
 import { APIFileHandler } from '@/lib/api-utils';
 
 export const runtime = 'edge';
 
 export async function POST(request: NextRequest) {
   try {
-    console.log('=== CONVERSION API CALLED ===');
-
-    // Parse form data using standardized handler
     const { file, params } = await APIFileHandler.parseFormData(request, {
-      maxSize: 50 * 1024 * 1024, // 50MB
+      maxSize: 50 * 1024 * 1024,
       allowedTypes: ['application/pdf'],
-      required: true
+      required: true,
     });
 
-    if (!file) {
-      throw new Error('No file provided for conversion');
-    }
+    if (!file) throw new Error('No file provided for conversion');
 
-    // Validate conversion parameters
     const format = APIFileHandler.validateParam(
       params.format,
       ['docx', 'txt', 'html', 'images'] as const,
       'format'
     );
-
     const quality = APIFileHandler.validateParam(
       params.quality,
       ['low', 'medium', 'high'] as const,
       'quality',
       'medium'
     );
-
     const preserveFormatting = APIFileHandler.validateBooleanParam(
       params.preserveFormatting,
       'preserveFormatting',
       true
     );
-
     const extractImages = APIFileHandler.validateBooleanParam(
       params.extractImages,
       'extractImages',
       false
     );
 
-    console.log('Validated parameters:', {
-      file: `${file.name} (${APIFileHandler.formatFileSize(file.size)})`,
-      format,
-      quality,
-      preserveFormatting,
-      extractImages
-    });
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('format', format);
+    fd.append('quality', quality);
+    fd.append('preserveFormatting', String(preserveFormatting));
+    fd.append('extractImages', String(extractImages));
 
-    // Initialize conversion service
-    const conversionService = PDFConversionService.getInstance();
-    
-    const conversionOptions = {
-      format,
-      quality,
-      preserveFormatting,
-      extractImages
-    };
+    /*  1️⃣  create job in Flask  */
+    const jobId = await PdfApiService.createJob('/convert', fd);
 
-    console.log('Starting conversion with options:', conversionOptions);
-
-    const result = await conversionService.convertPDF(file, conversionOptions);
-
-    console.log('Conversion successful:', {
-      originalSize: APIFileHandler.formatFileSize(result.originalSize),
-      convertedSize: APIFileHandler.formatFileSize(result.convertedSize),
-      format: result.format,
-      processingTime: `${result.processingTime}ms`
-    });
-
-    // Determine content type and file extension
-    const contentTypeMap = {
-      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      txt: 'text/plain',
-      html: 'text/html',
-      images: 'application/zip'
-    };
-
-    const fileExtensionMap = {
-      docx: 'docx',
-      txt: 'txt', 
-      html: 'html',
-      images: 'zip'
-    };
-
-    const contentType = contentTypeMap[format];
-    const extension = fileExtensionMap[format];
-    const filename = file.name.replace('.pdf', `.${extension}`);
-
-    const metadata = {
-      'Original-Size': result.originalSize.toString(),
-      'Converted-Size': result.convertedSize.toString(),
-      'Conversion-Format': result.format,
-      'Processing-Time': result.processingTime.toString(),
-      'Preserve-Formatting': preserveFormatting.toString(),
-      'Extract-Images': extractImages.toString()
-    };
-
-    return APIFileHandler.createFileResponse(
-      await result.convertedFile.arrayBuffer(),
-      filename,
-      contentType,
-      metadata
+    /*  2️⃣  return the envelope – browser will poll  */
+    return Response.json(
+      { status: 'success', message: 'Conversion job created', data: { job_id: jobId } },
+      { status: 202 }
     );
-
-  } catch (error) {
-    return APIFileHandler.createErrorResponse(error, 400);
+  } catch (err) {
+    return APIFileHandler.createErrorResponse(err, 400);
   }
 }
 

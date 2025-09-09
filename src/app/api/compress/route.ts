@@ -2,13 +2,13 @@
 import { NextRequest } from 'next/server';
 import { PDFCompressionService } from '@/lib/pdf-compression';
 import { APIFileHandler } from '@/lib/api-utils';
+import { PdfApiService } from '@/lib/api/pdf-services';
 
 export const runtime = 'edge';
 
 // Single file compression handler
 async function handleSingleCompression(file: File, params: Record<string, string>) {
   try {
-    // Validate options
     const compressionLevel = APIFileHandler.validateParam(
       params.compressionLevel,
       ['low', 'medium', 'high', 'maximum'],
@@ -23,29 +23,20 @@ async function handleSingleCompression(file: File, params: Record<string, string
       75
     );
 
-    // Compress the file
-    const compressionService = PDFCompressionService.getInstance();
-    const result = await compressionService.compressPDF(file, { compressionLevel, imageQuality });
+    /*  ----  NEW: job-based flow  ----  */
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('compressionLevel', compressionLevel);
+    fd.append('imageQuality', String(imageQuality));
 
-    console.log('Compression successful:', {
-      originalSize: result.originalSize,
-      compressedSize: result.compressedSize,
-      reduction: result.reductionPercent + '%'
-    });
+    // 1️⃣  create job in Flask
+    const jobId = await PdfApiService.createJob('/compress', fd);
 
-    // Return compressed file
-    return APIFileHandler.createFileResponse(
-      await result.compressedFile.arrayBuffer(),
-      file.name.replace('.pdf', '_compressed.pdf'),
-      'application/pdf',
-      {
-        'Original-Size': result.originalSize.toString(),
-        'Compressed-Size': result.compressedSize.toString(),
-        'Compression-Ratio': result.compressionRatio.toString(),
-        'Reduction-Percent': result.reductionPercent.toString(),
-      }
+    // 2️⃣  return envelope – browser will poll
+    return Response.json(
+      { status: 'success', message: 'Compression job created', data: { job_id: jobId } },
+      { status: 202 }
     );
-
   } catch (error) {
     console.error('Single compression error:', error);
     return APIFileHandler.createErrorResponse(error);
@@ -55,7 +46,6 @@ async function handleSingleCompression(file: File, params: Record<string, string
 // Bulk file compression handler
 async function handleBulkCompression(files: File[], params: Record<string, string>) {
   try {
-    // Validate options
     const compressionLevel = APIFileHandler.validateParam(
       params.compressionLevel,
       ['low', 'medium', 'high', 'maximum'],
@@ -70,36 +60,22 @@ async function handleBulkCompression(files: File[], params: Record<string, strin
       75
     );
 
-    // Compress all files
-    const compressionService = PDFCompressionService.getInstance();
-    const compressionPromises = files.map(file => 
-      compressionService.compressPDF(file, { compressionLevel, imageQuality })
+    /*  ----  fire one job per file  ----  */
+    const jobIds: string[] = [];
+    for (const file of files) {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('compressionLevel', compressionLevel);
+      fd.append('imageQuality', String(imageQuality));
+      const id = await PdfApiService.createJob('/compress', fd);
+      jobIds.push(id);
+    }
+
+    // return array of job-ids – UI can poll them in parallel
+    return Response.json(
+      { status: 'success', message: 'Bulk compression jobs created', data: { job_ids: jobIds } },
+      { status: 202 }
     );
-
-    const results = await Promise.all(compressionPromises);
-
-    console.log('Bulk compression successful:', {
-      totalFiles: results.length,
-    });
-
-    // For now, return the first file as placeholder
-    // TODO: Implement proper zip functionality for bulk downloads
-    const firstResult = results[0];
-    const firstFile = files[0];
-
-    return APIFileHandler.createFileResponse(
-      await firstResult.compressedFile.arrayBuffer(),
-      firstFile.name.replace('.pdf', '_compressed.pdf'),
-      'application/pdf',
-      {
-        'Original-Size': firstResult.originalSize.toString(),
-        'Compressed-Size': firstResult.compressedSize.toString(),
-        'Compression-Ratio': firstResult.compressionRatio.toString(),
-        'Reduction-Percent': firstResult.reductionPercent.toString(),
-        'Total-Files': files.length.toString(),
-      }
-    );
-
   } catch (error) {
     console.error('Bulk compression error:', error);
     return APIFileHandler.createErrorResponse(error);

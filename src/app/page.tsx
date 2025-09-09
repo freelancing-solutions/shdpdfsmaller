@@ -13,6 +13,26 @@ import { Upload, Download, FileText, Settings, Zap, Search, Trash2, RefreshCw } 
 import { useUser } from '@/hooks/useUser';
 import { useTabStore } from '@/store/tab-store';
 import { APIClient } from '@/utils/api-client';
+/*  ----------  shared job ⇢ blob helper  ---------- */
+import { PdfApiService } from '@/lib/api/pdf-services';
+
+async function runJobAndGetBlob(
+  endpoint: string,
+  form: FormData,
+  onProgress: (pct: number) => void
+): Promise<Blob> {
+  // 1️⃣  create
+  const jobId = await PdfApiService.createJob(endpoint, form);
+  // 2️⃣  poll
+  await PdfApiService.waitForJobCompletion(
+    jobId,
+    2000,          // check interval
+    300000,        // 5 min timeout
+    { onProgress: (s) => onProgress(s.status === 'processing' ? 50 : 0) }
+  );
+  // 3️⃣  download
+  return PdfApiService.downloadResult(jobId);
+}
 
 // File interfaces
 interface FileItem {
@@ -261,124 +281,46 @@ const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) =>
 
 // Updated compression handler using the new API client
 const startCompression = useCallback(async () => {
-  if (isLoading) return;
-  if (!user) {
-    alert("Please log in to use this feature.");
-    return;
-  }
+  if (isLoading || !user) return;
   if (files.length > 1 && user.Subscription?.plan !== 'PRO' && user.Subscription?.plan !== 'ENTERPRISE') {
-    alert("Bulk compression is a PRO feature. Please upgrade your plan.");
+    alert('Bulk compression is a PRO feature. Please upgrade.');
     return;
   }
-
-  if (files.length === 0) return;
-
-  const filesToProcess = files.filter(f => f.status === 'pending' && f.file);
-  if (filesToProcess.length === 0) {
-    console.warn('No files ready for processing');
-    return;
-  }
+  const todo = files.filter(f => f.status === 'pending' && f.file);
+  if (!todo.length) return;
 
   setIsProcessing(true);
   setProgress(0);
-  setBulkCompressedBlob(null);
 
   try {
-    // Update files status to processing
-    const processingIds = filesToProcess.map(f => f.id);
-    setFiles(prev => prev.map(f => 
-      processingIds.includes(f.id) ? { ...f, status: 'processing' } : f
-    ));
+    for (const item of todo) {
+      setFiles(prev => prev.map(f => f.id === item.id ? { ...f, status: 'processing' } : f));
 
-    const compressionOptions = {
-      compressionLevel: settings.compressionLevel,
-      imageQuality: settings.imageQuality
-    };
+      const fd = new FormData();
+      fd.append('file', item.file!);
+      fd.append('compressionLevel', settings.compressionLevel);
+      fd.append('imageQuality', String(settings.imageQuality));
 
-    if (filesToProcess.length === 1) {
-      // Single file compression
-      const fileItem = filesToProcess[0];
-      
-      console.log('Compressing single file:', fileItem.name);
-      
-      const compressedBlob = await APIClient.compressFiles(
-        fileItem.file!,
-        compressionOptions,
-        {
-          onProgress: (progress) => setProgress(progress),
-          onError: (error) => {
-            console.error('Compression error:', error);
-            setFiles(prev => prev.map(f =>
-              f.id === fileItem.id ? { ...f, status: 'error', error } : f
-            ));
-          }
-        }
-      );
+      const blob = await runJobAndGetBlob('/compress', fd, setProgress);
 
-      const compressedSize = compressedBlob.size;
-      const originalSize = fileItem.size;
-      const compressionRatio = 1 - (compressedSize / originalSize);
-
-      setFiles(prev => prev.map(f =>
-        f.id === fileItem.id
-          ? {
-            ...f,
-            status: 'completed',
-            compressedSize,
-            compressionRatio,
-            compressedBlob,
-          }
-          : f
-      ));
-      setProgress(100);
-
-    } else {
-      // Multiple file compression
-      const validFiles = filesToProcess.map(f => f.file!);
-      
-      console.log('Compressing multiple files:', validFiles.length);
-      
-      const compressedBlob = await APIClient.compressFiles(
-        validFiles,
-        compressionOptions,
-        {
-          onProgress: (progress) => setProgress(progress),
-          onError: (error) => {
-            console.error('Bulk compression error:', error);
-            // Mark all as error
-            setFiles(prev => prev.map(f =>
-              processingIds.includes(f.id) ? { ...f, status: 'error', error } : f
-            ));
-          }
-        }
-      );
-
-      setBulkCompressedBlob(compressedBlob);
-      
-      // For bulk operations, mark all as completed
-      // You might want to handle individual file results differently
-      setFiles(prev => prev.map(f =>
-        processingIds.includes(f.id) ? { ...f, status: 'completed' } : f
-      ));
+      const cSize = blob.size;
+      setFiles(prev => prev.map(f => f.id === item.id ? {
+        ...f,
+        status: 'completed',
+        compressedSize: cSize,
+        compressionRatio: 1 - cSize / item.size,
+        compressedBlob: blob,
+      } : f));
       setProgress(100);
     }
-
-  } catch (error) {
-    console.error('Compression process failed:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    
-    setFiles(prev => prev.map(f => 
-      f.status === 'processing' ? { 
-        ...f, 
-        status: 'error', 
-        error: errorMessage
-      } : f
-    ));
+  } catch (e: any) {
+    todo.forEach(item =>
+      setFiles(prev => prev.map(f => f.id === item.id ? { ...f, status: 'error', error: e.message } : f))
+    );
   } finally {
     setIsProcessing(false);
   }
 }, [files, settings, user, isLoading]);
-
 
 
   const downloadFile = useCallback((fileId: string) => {
@@ -437,77 +379,46 @@ const startCompression = useCallback(async () => {
 
 
 const startConversion = useCallback(async () => {
-  if (convertFiles.length === 0) return;
-  
-  const filesToProcess = convertFiles.filter(f => f.status === 'pending');
-  if (filesToProcess.length === 0) return;
+  const todo = convertFiles.filter(f => f.status === 'pending' && f.file);
+  if (!todo.length) return;
 
   setIsConverting(true);
   setConvertProgress(0);
-  
+
   try {
-    const totalFiles = filesToProcess.length;
-    let processedFiles = 0;
-    
-    for (const fileItem of filesToProcess) {
-      setConvertFiles(prev => prev.map(f => 
-        f.id === fileItem.id ? { ...f, status: 'processing' } : f
-      ));
-      
-      try {
-        if (!fileItem.file) {
-          throw new Error('File object not found');
-        }
-        
-        const convertedBlob = await APIClient.convertFile(
-          fileItem.file,
-          {
-            format: convertSettings.format,
-            quality: convertSettings.quality,
-            preserveFormatting: convertSettings.preserveFormatting,
-            extractImages: convertSettings.extractImages
-          },
-          {
-            onError: (error) => {
-              console.error(`Conversion failed for ${fileItem.name}:`, error);
-              setConvertFiles(prev => prev.map(f => 
-                f.id === fileItem.id ? { ...f, status: 'error', error } : f
-              ));
-            }
-          }
-        );
-        
-        const convertedSize = convertedBlob.size;
-        
-        setConvertFiles(prev => prev.map(f => 
-          f.id === fileItem.id ? { 
-            ...f, 
-            status: 'completed',
-            format: convertSettings.format,
-            convertedSize,
-            convertedBlob
-          } : f
-        ));
-        
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        console.error(`Failed to convert ${fileItem.name}:`, error);
-        
-        setConvertFiles(prev => prev.map(f => 
-          f.id === fileItem.id ? { ...f, status: 'error', error: errorMessage } : f
-        ));
-      }
-      
-      processedFiles++;
-      setConvertProgress((processedFiles / totalFiles) * 100);
+    let done = 0;
+    for (const item of todo) {
+      setConvertFiles(prev => prev.map(f => f.id === item.id ? { ...f, status: 'processing' } : f));
+
+      const fd = new FormData();
+      fd.append('file', item.file!);
+      fd.append('format', convertSettings.format);
+      fd.append('quality', convertSettings.quality);
+      fd.append('preserveFormatting', String(convertSettings.preserveFormatting));
+      fd.append('extractImages', String(convertSettings.extractImages));
+
+      const blob = await runJobAndGetBlob('/convert', fd, setConvertProgress);
+
+      setConvertFiles(prev => prev.map(f => f.id === item.id ? {
+        ...f,
+        status: 'completed',
+        format: convertSettings.format,
+        convertedSize: blob.size,
+        convertedBlob: blob,
+      } : f));
+
+      done++;
+      setConvertProgress((done / todo.length) * 100);
     }
-    
-  } catch (error) {
-    console.error('Conversion process failed:', error);
+  } catch (e: any) {
+    todo.forEach(item =>
+      setConvertFiles(prev => prev.map(f => f.id === item.id ? { ...f, status: 'error', error: e.message } : f))
+    );
   } finally {
     setIsConverting(false);
   }
 }, [convertFiles, convertSettings]);
+
 
 // Updated file upload handlers for convert tab
 const handleConvertFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -587,79 +498,45 @@ const handleConvertFileUpload = useCallback(async (event: React.ChangeEvent<HTML
     setOcrFiles(prev => prev.filter(file => file.id !== fileId));
   }, []);
 
-  const startOCR = useCallback(async () => {
-    if (ocrFiles.length === 0) return;
-    
-    setIsOCRProcessing(true);
-    setOcrProgress(0);
-    
-    try {
-      const totalFiles = ocrFiles.filter(f => f.status === 'pending').length;
-      let processedFiles = 0;
-      
-      for (const file of ocrFiles) {
-        if (file.status !== 'pending') continue;
-        
-        setOcrFiles(prev => prev.map(f => 
-          f.id === file.id 
-            ? { ...f, status: 'processing' as const }
-            : f
-        ));
-        
-        try {
-          if (!file.file) {
-            throw new Error('File object not found');
-          }
-          
-          const formData = new FormData();
-          formData.append('file', file.file);
-          formData.append('language', ocrSettings.language);
-          formData.append('outputFormat', ocrSettings.outputFormat);
-          formData.append('preserveLayout', ocrSettings.preserveLayout.toString());
-          formData.append('confidence', ocrSettings.confidence.toString());
-          
-          const response = await fetch('/api/ocr', {
-            method: 'POST',
-            body: formData,
-          });
-          
-          if (!response.ok) {
-            throw new Error(`OCR failed: ${response.statusText}`);
-          }
-          
-          const processedBlob = await response.blob();
-          const confidence = parseFloat(response.headers.get('X-OCR-Confidence') || '85');
-          
-          setOcrFiles(prev => prev.map(f => 
-            f.id === file.id 
-              ? { 
-                  ...f, 
-                  status: 'completed' as const,
-                  confidence,
-                  processedBlob,
-                }
-              : f
-          ));
-          
-        } catch (error) {
-          console.error(`Failed to process OCR for ${file.name}:`, error);
-          setOcrFiles(prev => prev.map(f => 
-            f.id === file.id 
-              ? { ...f, status: 'error' as const, error: error instanceof Error ? error.message : 'Unknown error' }
-              : f
-          ));
-        }
-        
-        processedFiles++;
-        setOcrProgress((processedFiles / totalFiles) * 100);
-      }
-      
-    } catch (error) {
-      console.error('OCR process failed:', error);
-    } finally {
-      setIsOCRProcessing(false);
+const startOCR = useCallback(async () => {
+  const todo = ocrFiles.filter(f => f.status === 'pending' && f.file);
+  if (!todo.length) return;
+
+  setIsOCRProcessing(true);
+  setOcrProgress(0);
+
+  try {
+    let done = 0;
+    for (const item of todo) {
+      setOcrFiles(prev => prev.map(f => f.id === item.id ? { ...f, status: 'processing' } : f));
+
+      const fd = new FormData();
+      fd.append('file', item.file!);
+      fd.append('language', ocrSettings.language);
+      fd.append('outputFormat', ocrSettings.outputFormat);
+      fd.append('preserveLayout', String(ocrSettings.preserveLayout));
+      fd.append('confidence', String(ocrSettings.confidence));
+
+      const blob = await runJobAndGetBlob('/ocr', fd, setOcrProgress);
+
+      setOcrFiles(prev => prev.map(f => f.id === item.id ? {
+        ...f,
+        status: 'completed',
+        confidence: ocrSettings.confidence,
+        processedBlob: blob,
+      } : f));
+
+      done++;
+      setOcrProgress((done / todo.length) * 100);
     }
-  }, [ocrFiles, ocrSettings]);
+  } catch (e: any) {
+    todo.forEach(item =>
+      setOcrFiles(prev => prev.map(f => f.id === item.id ? { ...f, status: 'error', error: e.message } : f))
+    );
+  } finally {
+    setIsOCRProcessing(false);
+  }
+}, [ocrFiles, ocrSettings]);
 
   const downloadOCRFile = useCallback((fileId: string) => {
     const file = ocrFiles.find(f => f.id === fileId);

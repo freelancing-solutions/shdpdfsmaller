@@ -1,19 +1,17 @@
 import { NextRequest } from 'next/server';
 import { PDFOCRService } from '@/lib/pdf-ocr';
 import { APIFileHandler } from '@/lib/api-utils';
-
+import { PdfApiService } from '@/lib/api/pdf-services';
 
 export const runtime = 'edge';
 
 export async function POST(request: NextRequest) {
   try {
+    /*  ----  reuse your existing parse + validation  ----  */
     const { file, params } = await APIFileHandler.parseFormData(request);
 
-    if (!file) {
-      throw new Error('No file provided for OCR processing');
-    }
+    if (!file) throw new Error('No file provided for OCR processing');
 
-    // Validate OCR parameters
     const language = APIFileHandler.validateParam(
       params.language,
       ['en', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'zh', 'ja', 'ko'] as const,
@@ -37,46 +35,22 @@ export async function POST(request: NextRequest) {
       95
     );
 
-    const ocrService = PDFOCRService.getInstance();
-    
-    const options = { language, outputFormat, preserveLayout, confidence };
+    /*  ----  NEW: job-based flow  ----  */
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('language', language);
+    fd.append('outputFormat', outputFormat);
+    fd.append('preserveLayout', String(preserveLayout));
+    fd.append('confidence', String(confidence));
 
-    // Call the refactored OCR service
-    const result = await ocrService.processOCR(file, options);
+    // 1️⃣  create job in Flask
+    const jobId = await PdfApiService.createJob('/ocr', fd);
 
-    // Determine content type and file extension
-    const contentTypeMap = {
-      txt: 'text/plain',
-      pdf: 'application/pdf',
-      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'searchable-pdf': 'application/pdf',
-    };
-    const fileExtensionMap = {
-      txt: 'txt',
-      pdf: 'pdf',
-      docx: 'docx',
-      'searchable-pdf': 'pdf',
-    };
-
-    const contentType = contentTypeMap[outputFormat];
-    const fileExtension = fileExtensionMap[outputFormat];
-    const filename = file.name.replace('.pdf', `_ocr.${fileExtension}`);
-
-    const metadata = {
-      'Original-Size': result.originalSize.toString(),
-      'Processed-Size': result.processedSize.toString(),
-      'OCR-Confidence': result.confidence.toString(),
-      'Processing-Time': result.processingTime.toString(),
-      'Output-Format': outputFormat,
-    };
-
-    return APIFileHandler.createFileResponse(
-      new Uint8Array(await result.processedFile.arrayBuffer()),
-      filename,
-      contentType,
-      metadata
+    // 2️⃣  return envelope – browser will poll
+    return Response.json(
+      { status: 'success', message: 'OCR job created', data: { job_id: jobId } },
+      { status: 202 }
     );
-
   } catch (error) {
     console.error('OCR API error:', error);
     return APIFileHandler.createErrorResponse(error);
