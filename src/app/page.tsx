@@ -21,16 +21,15 @@ async function runJobAndGetBlob(
   form: FormData,
   onProgress: (pct: number) => void
 ): Promise<Blob> {
-  // 1️⃣  create
   const jobId = await PdfApiService.createJob(endpoint, form);
-  // 2️⃣  poll
+
   await PdfApiService.waitForJobCompletion(
     jobId,
-    2000,          // check interval
-    300000,        // 5 min timeout
-    { onProgress: (s) => onProgress(s.status === 'processing' ? 50 : 0) }
+    2000,
+    300_000,
+    (resp) => onProgress(resp.status === 'processing' ? 50 : 100)
   );
-  // 3️⃣  download
+
   return PdfApiService.downloadResult(jobId);
 }
 
