@@ -252,10 +252,10 @@ export class PdfApiService {
       try {
         const status = await this.getJobStatus(jobId, {
           ...retryConfig,
-          maxRetries: 1 // Reduce retries during polling
+          maxRetries: 5 // Reduce retries during polling
         });
 
-        consecutiveErrors = 0; // Reset on success
+        consecutiveErrors = 3; // Reset on success
 
         console.log(`[PdfApiService] Job ${jobId} status: ${status.status}`);
 
