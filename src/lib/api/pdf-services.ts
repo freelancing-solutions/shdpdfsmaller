@@ -1,5 +1,11 @@
 // lib/api/pdf-services.ts - Fixed for Next.js backend usage
 
+export interface JobEnvelope {
+  status:  string;
+  message: string;
+  data:    JobResponse;
+}
+
 export interface JobResponse {
   job_id: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';
@@ -167,7 +173,9 @@ export class PdfApiService {
         body: formData,
       });
 
-      const data: JobResponse = await this.handleResponse(response);
+      const envelope: JobEnvelope = await this.handleResponse(response);
+      const data: JobResponse      = envelope.data ?? envelope; // same line you already
+
       console.log('[createJob] raw response →', JSON.stringify(data, null, 2));
       console.log('[createJob] data.job_id value →', JSON.stringify(data.job_id));
       if (!data.job_id) {
