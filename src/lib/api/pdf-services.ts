@@ -168,7 +168,8 @@ export class PdfApiService {
       });
 
       const data: JobResponse = await this.handleResponse(response);
-      console.log('[createJob] raw response →', JSON.stringify(data, null, 2)); // ← NEW
+      console.log('[createJob] raw response →', JSON.stringify(data, null, 2));
+      console.log('[createJob] data.job_id value →', JSON.stringify(data.job_id));
       if (!data.job_id) {
         throw new Error('No job ID received from API');
       }
